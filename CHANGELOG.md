@@ -78,6 +78,7 @@ v1.8.11 [unreleased]
 -	[#21592](https://github.com/influxdata/influxdb/pull/21592): fix: avoid rewriting fields.idx unnecessarily
 -	[#21659](https://github.com/influxdata/influxdb/pull/21659): fix: do not close connection twice in DigestWithOptions
 -	[#21666](https://github.com/influxdata/influxdb/pull/21666): fix: do not panic on cleaning up failed iterators
+-	[#21792](https://github.com/influxdata/influxdb/pull/21792): fix: error instead of panic for statement rewrite failure
 
 v1.8.10 [2021-10-11]
 -------------------
