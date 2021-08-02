@@ -74,7 +74,13 @@ v1.8.10-c1.0.0 [2022-04-20]
 v1.8.11 [unreleased]
 -------------------
 
+### Features
+
 -	[#18429](https://github.com/influxdata/influxdb/pull/18429): Add option to authenticate prometheus remote read
+-	[#21983](https://github.com/influxdata/influxdb/pull/21983): feat: SHOW TAG VALUES should produce results from one specific RP
+
+### Bugfixes
+
 -	[#21592](https://github.com/influxdata/influxdb/pull/21592): fix: avoid rewriting fields.idx unnecessarily
 -	[#21659](https://github.com/influxdata/influxdb/pull/21659): fix: do not close connection twice in DigestWithOptions
 -	[#21666](https://github.com/influxdata/influxdb/pull/21666): fix: do not panic on cleaning up failed iterators
