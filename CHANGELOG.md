@@ -80,6 +80,7 @@ v1.8.11 [unreleased]
 -	[#21666](https://github.com/influxdata/influxdb/pull/21666): fix: do not panic on cleaning up failed iterators
 -	[#21792](https://github.com/influxdata/influxdb/pull/21792): fix: error instead of panic for statement rewrite failure
 -	[#21795](https://github.com/influxdata/influxdb/pull/21795): fix: show shards gives empty expiry time for inf duration shards
+-	[#22040](https://github.com/influxdata/influxdb/pull/22040): fix: copy names from mmapped memory before closing iterator
 
 v1.8.10 [2021-10-11]
 -------------------
