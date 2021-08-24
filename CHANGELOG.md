@@ -83,6 +83,7 @@ v1.8.11 [unreleased]
 -	[#22040](https://github.com/influxdata/influxdb/pull/22040): fix: copy names from mmapped memory before closing iterator
 -	[#22273](https://github.com/influxdata/influxdb/pull/22273): fix: return correct count of ErrNotExecuted
 -	[#22348](https://github.com/influxdata/influxdb/pull/22348): fix: flux error properly read by cloud
+-	[#22283](https://github.com/influxdata/influxdb/pull/22283): fix: require database authorization to see continuous queries
 
 v1.8.10 [2021-10-11]
 -------------------
