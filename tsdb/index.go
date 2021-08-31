@@ -1356,9 +1356,9 @@ func (is IndexSet) MeasurementNamesByExpr(auth query.FineAuthorizer, expr influx
 
 	// Return filtered list if expression exists.
 	if expr != nil {
-		itr, err := is.measurementNamesByExpr(auth, expr)
-		if err != nil {
-			return nil, err
+		itr, returnErr := is.measurementNamesByExpr(auth, expr)
+		if returnErr != nil {
+			return nil, returnErr
 		} else if itr == nil {
 			return nil, nil
 		}
@@ -1518,9 +1518,9 @@ func (is IndexSet) MeasurementNamesByPredicate(auth query.FineAuthorizer, expr i
 
 	// Return filtered list if expression exists.
 	if expr != nil {
-		itr, err := is.measurementNamesByPredicate(auth, expr)
-		if err != nil {
-			return nil, err
+		itr, returnErr := is.measurementNamesByPredicate(auth, expr)
+		if returnErr != nil {
+			return nil, returnErr
 		}
 		if itr != nil {
 			defer func() {
