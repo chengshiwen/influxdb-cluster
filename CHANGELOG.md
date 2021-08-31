@@ -82,6 +82,7 @@ v1.8.11 [unreleased]
 -	[#21795](https://github.com/influxdata/influxdb/pull/21795): fix: show shards gives empty expiry time for inf duration shards
 -	[#22040](https://github.com/influxdata/influxdb/pull/22040): fix: copy names from mmapped memory before closing iterator
 -	[#22273](https://github.com/influxdata/influxdb/pull/22273): fix: return correct count of ErrNotExecuted
+-	[#22348](https://github.com/influxdata/influxdb/pull/22348): fix: flux error properly read by cloud
 
 v1.8.10 [2021-10-11]
 -------------------

@@ -1188,7 +1188,7 @@ func TestHandler_Flux_DisabledByDefault(t *testing.T) {
 		t.Fatalf("unexpected status: %d", got)
 	}
 
-	exp := "Flux query service disabled. Verify flux-enabled=true in the [http] section of the InfluxDB config.\n"
+	exp := `{"error":"Flux query service disabled. Verify flux-enabled=true in the [http] section of the InfluxDB config."}` + "\n"
 	if got := string(w.Body.Bytes()); !cmp.Equal(got, exp) {
 		t.Fatalf("unexpected body -got/+exp\n%s", cmp.Diff(got, exp))
 	}
