@@ -255,8 +255,9 @@ func (r *TaskManagerStatementResponse) UnmarshalBinary(data []byte) error {
 
 // MeasurementNamesRequest represents a request to retrieve measurement names.
 type MeasurementNamesRequest struct {
-	Database  string
-	Condition influxql.Expr
+	Database        string
+	RetentionPolicy string
+	Condition       influxql.Expr
 }
 
 // MarshalBinary encodes r to a binary format.
@@ -266,8 +267,9 @@ func (r *MeasurementNamesRequest) MarshalBinary() ([]byte, error) {
 		condition = r.Condition.String()
 	}
 	return proto.Marshal(&internal.MeasurementNamesRequest{
-		Database:  proto.String(r.Database),
-		Condition: proto.String(condition),
+		Database:        proto.String(r.Database),
+		RetentionPolicy: proto.String(r.RetentionPolicy),
+		Condition:       proto.String(condition),
 	})
 }
 
@@ -279,6 +281,7 @@ func (r *MeasurementNamesRequest) UnmarshalBinary(data []byte) error {
 	}
 
 	r.Database = pb.GetDatabase()
+	r.RetentionPolicy = pb.GetRetentionPolicy()
 	if pb.GetCondition() != "" {
 		if condition, err := influxql.ParseExpr(pb.GetCondition()); err != nil {
 			return err

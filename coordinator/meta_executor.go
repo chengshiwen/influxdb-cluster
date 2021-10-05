@@ -191,7 +191,7 @@ func (e *MetaExecutor) TaskManagerStatement(nodeID uint64, stmt influxql.Stateme
 	return resp.Result, resp.Err
 }
 
-func (e *MetaExecutor) MeasurementNames(nodeID uint64, database string, cond influxql.Expr) ([][]byte, error) {
+func (e *MetaExecutor) MeasurementNames(nodeID uint64, database string, retentionPolicy string, cond influxql.Expr) ([][]byte, error) {
 	conn, err := e.dial(nodeID)
 	if err != nil {
 		return nil, err
@@ -200,8 +200,9 @@ func (e *MetaExecutor) MeasurementNames(nodeID uint64, database string, cond inf
 
 	// Write request.
 	if err := EncodeTLV(conn, measurementNamesRequestMessage, &MeasurementNamesRequest{
-		Database:  database,
-		Condition: cond,
+		Database:        database,
+		RetentionPolicy: retentionPolicy,
+		Condition:       cond,
 	}); err != nil {
 		return nil, err
 	}

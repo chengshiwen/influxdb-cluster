@@ -609,7 +609,7 @@ func (s *Service) processMeasurementNamesRequest(conn net.Conn) {
 			return nil, err
 		}
 		// Return measurement names.
-		return s.TSDBStore.MeasurementNames(context.Background(), nil, req.Database, req.Condition)
+		return s.TSDBStore.MeasurementNames(context.Background(), nil, req.Database, req.RetentionPolicy, req.Condition)
 	}()
 	if err != nil {
 		s.Logger.Error("Error reading MeasurementNames request", zap.Error(err))

@@ -318,7 +318,7 @@ func TestStore_DropConcurrentWriteMultipleShards(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		measurements, err := s.MeasurementNames(context.Background(), query.OpenAuthorizer, "db0", nil)
+		measurements, err := s.MeasurementNames(context.Background(), query.OpenAuthorizer, "db0", "", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -891,7 +891,7 @@ func TestStore_MeasurementNames_Deduplicate(t *testing.T) {
 			`cpu value=3 20`,
 		)
 
-		meas, err := s.MeasurementNames(context.Background(), query.OpenAuthorizer, "db0", nil)
+		meas, err := s.MeasurementNames(context.Background(), query.OpenAuthorizer, "db0", "", nil)
 		if err != nil {
 			t.Fatalf("unexpected error with MeasurementNames: %v", err)
 		}
@@ -932,7 +932,7 @@ func testStoreCardinalityTombstoning(t *testing.T, store *Store) {
 	}
 
 	// Delete all the series for each measurement.
-	mnames, err := store.MeasurementNames(context.Background(), nil, "db", nil)
+	mnames, err := store.MeasurementNames(context.Background(), nil, "db", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1187,7 +1187,7 @@ func testStoreMetaQueryTimeout(t *testing.T, store *Store, index string) {
 
 	testStoreMakeTimedFuncs(func(ctx context.Context) (string, error) {
 		const funcName = "MeasurementNames"
-		_, err := store.Store.MeasurementNames(ctx, nil, "db", nil)
+		_, err := store.Store.MeasurementNames(ctx, nil, "db", "", nil)
 		return funcName, err
 	}, index)(t)
 }
@@ -1512,7 +1512,7 @@ func TestStore_Sketches(t *testing.T) {
 		}
 
 		// Delete half the the measurements data
-		mnames, err := store.MeasurementNames(context.Background(), nil, "db", nil)
+		mnames, err := store.MeasurementNames(context.Background(), nil, "db", "", nil)
 		if err != nil {
 			return err
 		}
@@ -1551,7 +1551,7 @@ func TestStore_Sketches(t *testing.T) {
 
 		// Now delete the rest of the measurements.
 		// This will cause the measurement tombstones to exceed the measurement cardinality for TSI.
-		mnames, err = store.MeasurementNames(context.Background(), nil, "db", nil)
+		mnames, err = store.MeasurementNames(context.Background(), nil, "db", "", nil)
 		if err != nil {
 			return err
 		}
@@ -1745,7 +1745,7 @@ func TestStore_Measurements_Auth(t *testing.T) {
 			},
 		}
 
-		names, err := s.MeasurementNames(context.Background(), authorizer, "db0", nil)
+		names, err := s.MeasurementNames(context.Background(), authorizer, "db0", "", nil)
 		if err != nil {
 			return err
 		}
@@ -1775,7 +1775,7 @@ func TestStore_Measurements_Auth(t *testing.T) {
 			return err
 		}
 
-		if names, err = s.MeasurementNames(context.Background(), authorizer, "db0", nil); err != nil {
+		if names, err = s.MeasurementNames(context.Background(), authorizer, "db0", "", nil); err != nil {
 			return err
 		}
 
@@ -2091,7 +2091,7 @@ func TestStore_MeasurementNames_ConcurrentDropShard(t *testing.T) {
 					errC <- nil
 					return
 				default:
-					names, err := s.MeasurementNames(context.Background(), nil, "db0", nil)
+					names, err := s.MeasurementNames(context.Background(), nil, "db0", "", nil)
 					if err == tsdb.ErrIndexClosing || err == tsdb.ErrEngineClosed {
 						continue // These errors are expected
 					}

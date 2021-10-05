@@ -36,7 +36,7 @@ func GetReadSource(any types.Any) (*ReadSource, error) {
 
 type TSDBStore interface {
 	Shards(ids []uint64) []*tsdb.Shard
-	MeasurementNames(ctx context.Context, auth query.FineAuthorizer, database string, cond influxql.Expr) ([][]byte, error)
+	MeasurementNames(ctx context.Context, auth query.FineAuthorizer, database string, retentionPolicy string, cond influxql.Expr) ([][]byte, error)
 	TagKeys(ctx context.Context, auth query.FineAuthorizer, shardIDs []uint64, cond influxql.Expr) ([]tsdb.TagKeys, error)
 	TagValues(ctx context.Context, auth query.FineAuthorizer, shardIDs []uint64, cond influxql.Expr) ([]tsdb.TagValues, error)
 }
@@ -404,7 +404,8 @@ func (s *Store) MeasurementNames(ctx context.Context, req *MeasurementNamesReque
 
 	// TODO(jsternberg): Use a real authorizer.
 	auth := query.OpenAuthorizer
-	values, err := s.TSDBStore.MeasurementNames(ctx, auth, database, expr)
+	// NOTE: this preserves the existing flux behaviour of ignoring the retention policy here
+	values, err := s.TSDBStore.MeasurementNames(ctx, auth, database, "", expr)
 	if err != nil {
 		return nil, err
 	}

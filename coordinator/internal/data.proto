@@ -33,8 +33,9 @@ message TaskManagerStatementResponse {
 }
 
 message MeasurementNamesRequest {
-    required string Database  = 1;
-    optional string Condition = 2;
+    required string Database        = 1;
+    optional string RetentionPolicy = 2;
+    optional string Condition       = 3;
 }
 
 message MeasurementNamesResponse {
