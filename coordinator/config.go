@@ -68,6 +68,7 @@ type Config struct {
 	MaxSelectPointN       int           `toml:"max-select-point"`
 	MaxSelectSeriesN      int           `toml:"max-select-series"`
 	MaxSelectBucketsN     int           `toml:"max-select-buckets"`
+	TerminationQueryLog   bool          `toml:"termination-query-log"`
 
 	// TLS is a base tls config to use for tls clients.
 	TLS *tls.Config `toml:"-"`
@@ -85,6 +86,7 @@ func NewConfig() Config {
 		MaxSelectPointN:      DefaultMaxSelectPointN,
 		MaxSelectSeriesN:     DefaultMaxSelectSeriesN,
 		MaxSelectBucketsN:    DefaultMaxSelectBucketsN,
+		TerminationQueryLog:  false,
 	}
 }
 
@@ -114,5 +116,6 @@ func (c Config) Diagnostics() (*diagnostics.Diagnostics, error) {
 		"max-select-point":          c.MaxSelectPointN,
 		"max-select-series":         c.MaxSelectSeriesN,
 		"max-select-buckets":        c.MaxSelectBucketsN,
+		"termination-query-log":     c.TerminationQueryLog,
 	}), nil
 }
