@@ -14,6 +14,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	internal "github.com/influxdata/influxdb/cmd/influxd/backup_util/internal"
+	errors2 "github.com/influxdata/influxdb/pkg/errors"
 	"github.com/influxdata/influxdb/services/snapshotter"
 )
 
@@ -54,11 +55,12 @@ func (ep *PortablePacker) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-func GetMetaBytes(fname string) ([]byte, error) {
+func GetMetaBytes(fname string) (_ []byte, retErr error) {
 	f, err := os.Open(fname)
 	if err != nil {
 		return []byte{}, err
 	}
+	defer errors2.Capture(&retErr, f.Close)()
 
 	var buf bytes.Buffer
 	if _, err := io.Copy(&buf, f); err != nil {
