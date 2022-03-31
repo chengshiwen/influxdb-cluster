@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math"
 	"math/rand"
 	"net/http"
@@ -214,7 +213,7 @@ func (c *Client) Ping(checkAllMetaServers bool) error {
 		return nil
 	}
 
-	b, err := ioutil.ReadAll(resp.Body)
+	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}
@@ -263,7 +262,7 @@ func (c *Client) acquireLease(name string) (*Lease, error) {
 	case http.StatusServiceUnavailable:
 		return nil, ErrServiceUnavailable
 	case http.StatusBadRequest:
-		b, e := ioutil.ReadAll(resp.Body)
+		b, e := io.ReadAll(resp.Body)
 		if e != nil {
 			return nil, e
 		}
@@ -275,7 +274,7 @@ func (c *Client) acquireLease(name string) (*Lease, error) {
 	}
 
 	// Read lease JSON from response body.
-	b, e := ioutil.ReadAll(resp.Body)
+	b, e := io.ReadAll(resp.Body)
 	if e != nil {
 		return nil, e
 	}
@@ -1192,7 +1191,7 @@ func (c *Client) exec(url string, typ internal.Command_Type, desc *proto.Extensi
 
 	res := &internal.Response{}
 
-	b, err = ioutil.ReadAll(resp.Body)
+	b, err = io.ReadAll(resp.Body)
 	if err != nil {
 		return 0, err
 	}
@@ -1256,7 +1255,7 @@ func (c *Client) getSnapshot(server string, index uint64) (*Data, error) {
 		return nil, fmt.Errorf("meta server returned non-200: %s", resp.Status)
 	}
 
-	b, err := ioutil.ReadAll(resp.Body)
+	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}

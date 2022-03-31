@@ -6,7 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"mime"
 	"net/http"
 	"net/url"
@@ -103,7 +103,7 @@ func checkError(resp *http.Response) error {
 	case 4:
 		// We will attempt to parse this error outside of this block.
 		msg := "client error"
-		data, _ := ioutil.ReadAll(resp.Body)
+		data, _ := io.ReadAll(resp.Body)
 		mt, _, err := mime.ParseMediaType(resp.Header.Get("content-type"))
 		if err == nil && mt == "text/plain" && len(msg) > 0 {
 			msg = string(data)

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io/ioutil"
 	"math"
 	"os"
 	"path/filepath"
@@ -33,7 +32,7 @@ import (
 )
 
 func TestShardWriteAndIndex(t *testing.T) {
-	tmpDir, _ := ioutil.TempDir("", "shard_test")
+	tmpDir, _ := os.MkdirTemp("", "shard_test")
 	defer os.RemoveAll(tmpDir)
 	tmpShard := filepath.Join(tmpDir, "shard")
 	tmpWal := filepath.Join(tmpDir, "wal")
@@ -103,7 +102,7 @@ func TestShardWriteAndIndex(t *testing.T) {
 }
 
 func TestShard_Open_CorruptFieldsIndex(t *testing.T) {
-	tmpDir, _ := ioutil.TempDir("", "shard_test")
+	tmpDir, _ := os.MkdirTemp("", "shard_test")
 	defer os.RemoveAll(tmpDir)
 	tmpShard := filepath.Join(tmpDir, "shard")
 	tmpWal := filepath.Join(tmpDir, "wal")
@@ -154,7 +153,7 @@ func TestShard_Open_CorruptFieldsIndex(t *testing.T) {
 }
 
 func TestMaxSeriesLimit(t *testing.T) {
-	tmpDir, _ := ioutil.TempDir("", "shard_test")
+	tmpDir, _ := os.MkdirTemp("", "shard_test")
 	defer os.RemoveAll(tmpDir)
 	tmpShard := filepath.Join(tmpDir, "db", "rp", "1")
 	tmpWal := filepath.Join(tmpDir, "wal")
@@ -210,7 +209,7 @@ func TestMaxSeriesLimit(t *testing.T) {
 }
 
 func TestShard_MaxTagValuesLimit(t *testing.T) {
-	tmpDir, _ := ioutil.TempDir("", "shard_test")
+	tmpDir, _ := os.MkdirTemp("", "shard_test")
 	defer os.RemoveAll(tmpDir)
 	tmpShard := filepath.Join(tmpDir, "db", "rp", "1")
 	tmpWal := filepath.Join(tmpDir, "wal")
@@ -266,7 +265,7 @@ func TestShard_MaxTagValuesLimit(t *testing.T) {
 }
 
 func TestWriteTimeTag(t *testing.T) {
-	tmpDir, _ := ioutil.TempDir("", "shard_test")
+	tmpDir, _ := os.MkdirTemp("", "shard_test")
 	defer os.RemoveAll(tmpDir)
 	tmpShard := filepath.Join(tmpDir, "shard")
 	tmpWal := filepath.Join(tmpDir, "wal")
@@ -317,7 +316,7 @@ func TestWriteTimeTag(t *testing.T) {
 }
 
 func TestWriteTimeField(t *testing.T) {
-	tmpDir, _ := ioutil.TempDir("", "shard_test")
+	tmpDir, _ := os.MkdirTemp("", "shard_test")
 	defer os.RemoveAll(tmpDir)
 	tmpShard := filepath.Join(tmpDir, "shard")
 	tmpWal := filepath.Join(tmpDir, "wal")
@@ -353,7 +352,7 @@ func TestWriteTimeField(t *testing.T) {
 }
 
 func TestShardWriteAddNewField(t *testing.T) {
-	tmpDir, _ := ioutil.TempDir("", "shard_test")
+	tmpDir, _ := os.MkdirTemp("", "shard_test")
 	defer os.RemoveAll(tmpDir)
 	tmpShard := filepath.Join(tmpDir, "shard")
 	tmpWal := filepath.Join(tmpDir, "wal")
@@ -406,7 +405,7 @@ func TestShard_WritePoints_FieldConflictConcurrent(t *testing.T) {
 	if testing.Short() || runtime.GOOS == "windows" {
 		t.Skip("Skipping on short and windows")
 	}
-	tmpDir, _ := ioutil.TempDir("", "shard_test")
+	tmpDir, _ := os.MkdirTemp("", "shard_test")
 	defer os.RemoveAll(tmpDir)
 	tmpShard := filepath.Join(tmpDir, "shard")
 	tmpWal := filepath.Join(tmpDir, "wal")
@@ -495,7 +494,7 @@ func TestShard_WritePoints_FieldConflictConcurrentQuery(t *testing.T) {
 	if testing.Short() {
 		t.Skip()
 	}
-	tmpDir, _ := ioutil.TempDir("", "shard_test")
+	tmpDir, _ := os.MkdirTemp("", "shard_test")
 	defer os.RemoveAll(tmpDir)
 	tmpShard := filepath.Join(tmpDir, "shard")
 	tmpWal := filepath.Join(tmpDir, "wal")
@@ -646,7 +645,7 @@ func TestShard_WritePoints_FieldConflictConcurrentQuery(t *testing.T) {
 // Ensures that when a shard is closed, it removes any series meta-data
 // from the index.
 func TestShard_Close_RemoveIndex(t *testing.T) {
-	tmpDir, _ := ioutil.TempDir("", "shard_test")
+	tmpDir, _ := os.MkdirTemp("", "shard_test")
 	defer os.RemoveAll(tmpDir)
 	tmpShard := filepath.Join(tmpDir, "shard")
 	tmpWal := filepath.Join(tmpDir, "wal")
@@ -1685,7 +1684,7 @@ func TestMeasurementFieldSet_InvalidFormat(t *testing.T) {
 
 	path := filepath.Join(dir, "fields.idx")
 
-	if err := ioutil.WriteFile(path, []byte{0, 0}, 0666); err != nil {
+	if err := os.WriteFile(path, []byte{0, 0}, 0666); err != nil {
 		t.Fatalf("error writing fields.index: %v", err)
 	}
 
@@ -2109,7 +2108,7 @@ func benchmarkWritePointsExistingSeriesEqualBatches(b *testing.B, mCnt, tkCnt, t
 }
 
 func openShard(sfile *SeriesFile) (*tsdb.Shard, string, error) {
-	tmpDir, _ := ioutil.TempDir("", "shard_test")
+	tmpDir, _ := os.MkdirTemp("", "shard_test")
 	tmpShard := filepath.Join(tmpDir, "shard")
 	tmpWal := filepath.Join(tmpDir, "wal")
 	opts := tsdb.NewEngineOptions()
@@ -2244,7 +2243,7 @@ func (sh *Shard) Close() error {
 // NewShards create several shards all sharing the same
 func NewShards(index string, n int) Shards {
 	// Create temporary path for data and WAL.
-	dir, err := ioutil.TempDir("", "influxdb-tsdb-")
+	dir, err := os.MkdirTemp("", "influxdb-tsdb-")
 	if err != nil {
 		panic(err)
 	}
@@ -2346,7 +2345,7 @@ func (sh *Shard) MustWritePointsString(s string) {
 }
 
 func MustTempDir() (string, func()) {
-	dir, err := ioutil.TempDir("", "shard-test")
+	dir, err := os.MkdirTemp("", "shard-test")
 	if err != nil {
 		panic(fmt.Sprintf("failed to create temp dir: %v", err))
 	}

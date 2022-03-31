@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"math"
 	"math/rand"
@@ -259,7 +258,7 @@ func (h *handler) serveExec(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Read the command from the request body.
-	body, err := ioutil.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		h.httpError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -684,7 +683,7 @@ func (h *handler) servePing(w http.ResponseWriter, r *http.Request) {
 		}
 
 		defer resp.Body.Close()
-		b, err := ioutil.ReadAll(resp.Body)
+		b, err := io.ReadAll(resp.Body)
 		if err != nil {
 			healthy = false
 			break

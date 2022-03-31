@@ -2,7 +2,6 @@ package hh
 
 import (
 	"io"
-	"io/ioutil"
 	"os"
 	"strings"
 	"testing"
@@ -29,7 +28,7 @@ func (f *fakeMetaStore) DataNode(nodeID uint64) (*meta.NodeInfo, error) {
 }
 
 func TestNodeProcessorSendBlock(t *testing.T) {
-	dir, err := ioutil.TempDir("", "node_processor_test")
+	dir, err := os.MkdirTemp("", "node_processor_test")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}

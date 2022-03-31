@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"strings"
@@ -40,7 +39,7 @@ func TestMux(t *testing.T) {
 		mux := tcp.NewMux()
 		mux.Timeout = 200 * time.Millisecond
 		if !testing.Verbose() {
-			mux.Logger = log.New(ioutil.Discard, "", 0)
+			mux.Logger = log.New(io.Discard, "", 0)
 		}
 
 		errC := make(chan error)

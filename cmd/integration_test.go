@@ -1,7 +1,6 @@
 package cmd_test
 
 import (
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,7 +22,7 @@ type TestRunCommand struct {
 }
 
 func NewTestRunCommand(env map[string]string) *TestRunCommand {
-	dir, err := ioutil.TempDir("", "testrun-")
+	dir, err := os.MkdirTemp("", "testrun-")
 	if err != nil {
 		panic(err)
 	}
@@ -112,7 +111,7 @@ type TestMetaRunCommand struct {
 }
 
 func NewTestMetaRunCommand(env map[string]string) *TestMetaRunCommand {
-	dir, err := ioutil.TempDir("", "testmetarun-")
+	dir, err := os.MkdirTemp("", "testmetarun-")
 	if err != nil {
 		panic(err)
 	}

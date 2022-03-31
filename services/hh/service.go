@@ -3,7 +3,6 @@ package hh // import "github.com/influxdata/influxdb/services/hh"
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -160,7 +159,7 @@ func (s *Service) Open() error {
 	}
 
 	// Create a node processor for each node/shard directory.
-	files, err := ioutil.ReadDir(s.cfg.Dir)
+	files, err := os.ReadDir(s.cfg.Dir)
 	if err != nil {
 		return err
 	}
@@ -172,7 +171,7 @@ func (s *Service) Open() error {
 			continue
 		}
 
-		sfiles, err := ioutil.ReadDir(s.pathforNode(nodeID))
+		sfiles, err := os.ReadDir(s.pathforNode(nodeID))
 		if err != nil {
 			return err
 		}

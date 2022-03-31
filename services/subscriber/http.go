@@ -3,7 +3,7 @@ package subscriber
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"io/ioutil"
+	"os"
 	"time"
 
 	"github.com/influxdata/influxdb/client/v2"
@@ -65,7 +65,7 @@ func createTLSConfig(caCerts string, tlsConfig *tls.Config) (*tls.Config, error)
 }
 
 func loadCaCerts(caCerts string, tlsConfig *tls.Config) (*tls.Config, error) {
-	caCert, err := ioutil.ReadFile(caCerts)
+	caCert, err := os.ReadFile(caCerts)
 	if err != nil {
 		return nil, err
 	}

@@ -2,7 +2,7 @@ package stressClient
 
 import (
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -54,7 +54,7 @@ func (sc *stressClient) makeGet(addr, statementID string, tr *Tracer) {
 	defer resp.Body.Close()
 
 	// Read body and return it for Reporting
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 
 	if err != nil {
 		log.Fatalf("Error reading Query response body\n  error: %v\n", err)

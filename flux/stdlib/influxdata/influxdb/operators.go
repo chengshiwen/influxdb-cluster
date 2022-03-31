@@ -86,13 +86,7 @@ func (s *ReadRangePhysSpec) LookupDatabase(ctx context.Context, deps StorageDepe
 		return "", "", errors.New("cannot refer to buckets by their id in 1.x")
 	}
 
-	var db, rp string
-	if i := strings.IndexByte(s.Bucket, '/'); i == -1 {
-		db = s.Bucket
-	} else {
-		rp = s.Bucket[i+1:]
-		db = s.Bucket[:i]
-	}
+	db, rp, _ := strings.Cut(s.Bucket, "/")
 
 	// validate and resolve db/rp
 	di := deps.MetaClient.Database(db)

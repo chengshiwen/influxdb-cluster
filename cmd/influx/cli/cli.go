@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
@@ -183,7 +182,7 @@ func (c *CommandLine) Run() error {
 	}
 
 	if !hasTTY {
-		cmd, err := ioutil.ReadAll(os.Stdin)
+		cmd, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			return err
 		}

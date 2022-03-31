@@ -85,7 +85,6 @@ index 620d0e37d7..ff8698b893 100644
 -
 -import (
 -	"context"
--	"io/ioutil"
 -	"math"
 -	"math/rand"
 -	"os"
@@ -219,7 +218,7 @@ index 620d0e37d7..ff8698b893 100644
 -
 -func benchmarkRead(b *testing.B, sg gen.SeriesGenerator, f func(r influxdb.Reader) error) {
 -	logger := zaptest.NewLogger(b)
--	rootDir, err := ioutil.TempDir("", "storage-reads-test")
+-	rootDir, err := os.MkdirTemp("", "storage-reads-test")
 -	if err != nil {
 -		b.Fatal(err)
 -	}

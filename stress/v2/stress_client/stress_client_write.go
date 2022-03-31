@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"time"
 )
@@ -100,7 +99,7 @@ func makePost(url string, points io.Reader) (*http.Response, error) {
 		return resp, fmt.Errorf("Error making write POST request\n  error: %v\n  url: %v\n", err, url)
 	}
 
-	body, _ := ioutil.ReadAll(resp.Body)
+	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != 204 {
 		return resp, fmt.Errorf("Write returned non-204 status code\n  StatusCode: %v\n  InfluxDB Error: %v\n", resp.StatusCode, string(body))

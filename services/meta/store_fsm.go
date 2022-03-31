@@ -3,7 +3,6 @@ package meta
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
@@ -638,7 +637,7 @@ func (fsm *storeFSM) Snapshot() (raft.FSMSnapshot, error) {
 
 func (fsm *storeFSM) Restore(r io.ReadCloser) error {
 	// Read all bytes.
-	b, err := ioutil.ReadAll(r)
+	b, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}

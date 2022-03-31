@@ -4,7 +4,6 @@ import (
 	"expvar"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"strings"
 	"sync"
@@ -45,7 +44,7 @@ func Write(w http.ResponseWriter, req *http.Request) {
 	fmt.Printf("Reqests Per Second: %v\n", hitspersecond)
 	fmt.Printf("Count: %v\n", n)
 
-	content, _ := ioutil.ReadAll(req.Body)
+	content, _ := io.ReadAll(req.Body)
 	m.Lock()
 	arr := strings.Split(string(content), "\n")
 	linecount += len(arr)

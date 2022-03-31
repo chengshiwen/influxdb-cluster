@@ -3,7 +3,7 @@ package meta
 import (
 	"crypto/tls"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -54,7 +54,7 @@ func (r *raftState) open(s *store, ln net.Listener) error {
 	// Setup raft configuration.
 	config := raft.DefaultConfig()
 	config.LocalID = raft.ServerID(s.raftAddr)
-	config.LogOutput = ioutil.Discard
+	config.LogOutput = io.Discard
 
 	if r.config.ClusterTracing {
 		config.LogOutput = os.Stdout

@@ -3,7 +3,6 @@ package hh
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,7 +10,7 @@ import (
 )
 
 func BenchmarkQueueAppend(b *testing.B) {
-	dir, err := ioutil.TempDir("", "hh_queue")
+	dir, err := os.MkdirTemp("", "hh_queue")
 	if err != nil {
 		b.Fatalf("failed to create temp dir: %v", err)
 	}
@@ -35,7 +34,7 @@ func BenchmarkQueueAppend(b *testing.B) {
 }
 
 func TestQueueAppendOne(t *testing.T) {
-	dir, err := ioutil.TempDir("", "hh_queue")
+	dir, err := os.MkdirTemp("", "hh_queue")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
@@ -76,7 +75,7 @@ func TestQueueAppendOne(t *testing.T) {
 }
 
 func TestQueueAppendMultiple(t *testing.T) {
-	dir, err := ioutil.TempDir("", "hh_queue")
+	dir, err := os.MkdirTemp("", "hh_queue")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
@@ -116,7 +115,7 @@ func TestQueueAppendMultiple(t *testing.T) {
 }
 
 func TestQueueAdvancePastEnd(t *testing.T) {
-	dir, err := ioutil.TempDir("", "hh_queue")
+	dir, err := os.MkdirTemp("", "hh_queue")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
@@ -191,7 +190,7 @@ func TestQueueAdvancePastEnd(t *testing.T) {
 }
 
 func TestQueueFull(t *testing.T) {
-	dir, err := ioutil.TempDir("", "hh_queue")
+	dir, err := os.MkdirTemp("", "hh_queue")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
@@ -213,7 +212,7 @@ func TestQueueFull(t *testing.T) {
 }
 
 func TestQueueReopen(t *testing.T) {
-	dir, err := ioutil.TempDir("", "hh_queue")
+	dir, err := os.MkdirTemp("", "hh_queue")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
@@ -284,7 +283,7 @@ func TestPurgeQueue(t *testing.T) {
 		t.Skip("Skipping purge queue")
 	}
 
-	dir, err := ioutil.TempDir("", "hh_queue")
+	dir, err := os.MkdirTemp("", "hh_queue")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -266,7 +266,7 @@ func TestBasicPointGenerator_Generate(t *testing.T) {
 
 func Test_post(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		content, _ := ioutil.ReadAll(r.Body)
+		content, _ := io.ReadAll(r.Body)
 		lines := strings.Split(string(content), "\n")
 		if len(lines) != 3 {
 			t.Errorf("Expected 3 lines got %v", len(lines))
@@ -299,7 +299,7 @@ var basicIC = &BasicClient{
 
 func TestBasicClient_send(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		content, _ := ioutil.ReadAll(r.Body)
+		content, _ := io.ReadAll(r.Body)
 		lines := strings.Split(string(content), "\n")
 		if len(lines) != 3 {
 			t.Errorf("Expected 3 lines got %v", len(lines))
@@ -326,7 +326,7 @@ func TestBasicClient_Batch(t *testing.T) {
 	r := make(chan response)
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		content, _ := ioutil.ReadAll(r.Body)
+		content, _ := io.ReadAll(r.Body)
 		lines := strings.Split(string(content), "\n")
 		if len(lines) != 1000 {
 			t.Errorf("Expected 1000 lines got %v", len(lines))
