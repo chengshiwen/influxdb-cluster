@@ -21,6 +21,11 @@ type MetaClientMock struct {
 	DatabaseFn  func(name string) *meta.DatabaseInfo
 	DatabasesFn func() []meta.DatabaseInfo
 
+	DataNodeFn       func(id uint64) (*meta.NodeInfo, error)
+	DataNodesFn      func() []meta.NodeInfo
+	DeleteDataNodeFn func(id uint64) error
+	DeleteMetaNodeFn func(id uint64) error
+
 	DataFn                func() meta.Data
 	DeleteShardGroupFn    func(database string, policy string, id uint64) error
 	DropContinuousQueryFn func(database, name string) error
@@ -29,6 +34,9 @@ type MetaClientMock struct {
 	DropSubscriptionFn    func(database, rp, name string) error
 	DropShardFn           func(id uint64) error
 	DropUserFn            func(name string) error
+
+	MetaNodesFn func() []meta.NodeInfo
+	NodeIDFn    func() uint64
 
 	OpenFn func() error
 
@@ -93,6 +101,22 @@ func (c *MetaClientMock) Databases() []meta.DatabaseInfo {
 	return c.DatabasesFn()
 }
 
+func (c *MetaClientMock) DataNode(id uint64) (*meta.NodeInfo, error) {
+	return c.DataNodeFn(id)
+}
+
+func (c *MetaClientMock) DataNodes() []meta.NodeInfo {
+	return c.DataNodesFn()
+}
+
+func (c *MetaClientMock) DeleteDataNode(id uint64) error {
+	return c.DeleteDataNodeFn(id)
+}
+
+func (c *MetaClientMock) DeleteMetaNode(id uint64) error {
+	return c.DeleteMetaNodeFn(id)
+}
+
 func (c *MetaClientMock) DeleteShardGroup(database string, policy string, id uint64) error {
 	return c.DeleteShardGroupFn(database, policy, id)
 }
@@ -119,6 +143,14 @@ func (c *MetaClientMock) DropSubscription(database, rp, name string) error {
 
 func (c *MetaClientMock) DropUser(name string) error {
 	return c.DropUserFn(name)
+}
+
+func (c *MetaClientMock) MetaNodes() []meta.NodeInfo {
+	return c.MetaNodesFn()
+}
+
+func (c *MetaClientMock) NodeID() uint64 {
+	return c.NodeIDFn()
 }
 
 func (c *MetaClientMock) RetentionPolicy(database, name string) (rpi *meta.RetentionPolicyInfo, err error) {

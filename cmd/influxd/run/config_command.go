@@ -1,10 +1,12 @@
 package run
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 
 	"github.com/BurntSushi/toml"
 )
@@ -52,8 +54,12 @@ func (cmd *PrintConfigCommand) Run(args ...string) error {
 		return fmt.Errorf("%s. To generate a valid configuration file run `influxd config > influxdb.generated.conf`", err)
 	}
 
-	toml.NewEncoder(cmd.Stdout).Encode(config)
-	fmt.Fprint(cmd.Stdout, "\n")
+	buf := new(bytes.Buffer)
+	toml.NewEncoder(buf).Encode(config)
+	output := buf.String()
+	re := regexp.MustCompile(` *bind-address[^\[\]]*?internal-shared-secret.*?\n`)
+	output = re.ReplaceAllString(output, "")
+	fmt.Fprintln(cmd.Stdout, output)
 
 	return nil
 }

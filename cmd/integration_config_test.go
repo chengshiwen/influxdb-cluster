@@ -21,8 +21,14 @@ func TestRetentionAutocreate(t *testing.T) {
 				"INFLUXDB_META_RETENTION_AUTOCREATE": strconv.FormatBool(tc.enabled),
 			})
 			defer cmd.Cleanup()
+			metaCmd := NewTestMetaRunCommand(map[string]string{
+				"INFLUXDB_META_RETENTION_AUTOCREATE": strconv.FormatBool(tc.enabled),
+			})
+			defer metaCmd.Cleanup()
 
 			cmd.MustRun()
+			metaCmd.MustRun()
+			metaCmd.AddData(cmd.BoundTCPAddr())
 
 			c, err := client.NewHTTPClient(client.HTTPConfig{
 				Addr: "http://" + cmd.BoundHTTPAddr(),
@@ -56,8 +62,14 @@ func TestCacheMaxMemorySize(t *testing.T) {
 		"INFLUXDB_DATA_CACHE_MAX_MEMORY_SIZE": "1024",
 	})
 	defer cmd.Cleanup()
+	metaCmd := NewTestMetaRunCommand(map[string]string{
+		"INFLUXDB_META_RETENTION_AUTOCREATE": "true",
+	})
+	defer metaCmd.Cleanup()
 
 	cmd.MustRun()
+	metaCmd.MustRun()
+	metaCmd.AddData(cmd.BoundTCPAddr())
 
 	c := cmd.HTTPClient()
 	_ = mustQuery(c, "CREATE DATABASE test", "", "")

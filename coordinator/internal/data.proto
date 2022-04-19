@@ -1,0 +1,137 @@
+syntax = "proto2";
+package internal;
+
+message WriteShardRequest {
+    required uint64 ShardID = 1;
+    repeated bytes  Points  = 2;
+    optional string Database = 3;
+    optional string RetentionPolicy = 4;
+}
+
+message WriteShardResponse {
+    required int32  Code    = 1;
+    optional string Message = 2;
+}
+
+message ExecuteStatementRequest {
+    required string Statement = 1;
+    required string Database  = 2;
+}
+
+message ExecuteStatementResponse {
+    required int32  Code    = 1;
+    optional string Message = 2;
+}
+
+message CreateIteratorRequest {
+    repeated uint64 ShardIDs    = 1;
+    required bytes  Measurement = 2;
+    required bytes  Opt         = 3;
+}
+
+message CreateIteratorResponse {
+    optional string Err  = 1;
+    required int32  Type = 2;
+
+    optional IteratorStats Stats = 3;
+}
+
+message IteratorStats {
+    optional int64 SeriesN = 1;
+    optional int64 PointN  = 2;
+}
+
+message IteratorCostRequest {
+    repeated uint64 ShardIDs    = 1;
+    required bytes  Measurement = 2;
+    required bytes  Opt         = 3;
+}
+
+message IteratorCostResponse {
+    optional string Err = 1;
+
+    optional IteratorCost Cost = 2;
+}
+
+message IteratorCost {
+    optional int64 NumShards    = 1;
+    optional int64 NumSeries    = 2;
+    optional int64 CachedValues = 3;
+    optional int64 NumFiles     = 4;
+    optional int64 BlocksRead   = 5;
+    optional int64 BlockSize    = 6;
+}
+
+message FieldDimensionsRequest {
+    repeated uint64 ShardIDs    = 1;
+    required bytes  Measurement = 2;
+}
+
+message FieldDimensionsResponse {
+    required bytes  Fields     = 1;
+    repeated string Dimensions = 2;
+    optional string Err        = 3;
+}
+
+message MapTypeRequest {
+    repeated uint64 ShardIDs    = 1;
+    required bytes  Measurement = 2;
+    required string Field       = 3;
+}
+
+message MapTypeResponse {
+    required int32  Type = 1;
+    optional string Err  = 2;
+}
+
+message ExpandSourcesRequest {
+    repeated uint64 ShardIDs = 1;
+    required bytes  Sources  = 2;
+}
+
+message ExpandSourcesResponse {
+    required bytes  Sources = 1;
+    optional string Err     = 2;
+}
+
+message BackupShardRequest {
+    required uint64 ShardID = 1;
+    optional int64  Since   = 2;
+}
+
+message BackupShardResponse {
+    optional string Err = 1;
+}
+
+message CopyShardRequest {
+    required string Host     = 1;
+    required string Database = 2;
+    required string Policy   = 3;
+    required uint64 ShardID  = 4;
+    optional int64  Since    = 5;
+}
+
+message CopyShardResponse {
+    optional string Err = 1;
+}
+
+message RemoveShardRequest {
+    required uint64 ShardID = 1;
+}
+
+message RemoveShardResponse {
+    optional string Err = 1;
+}
+
+message JoinClusterRequest {
+    repeated string MetaServers = 1;
+    required bool   Update      = 2;
+}
+
+message JoinClusterResponse {
+    optional string Err = 1;
+}
+
+message LeaveClusterResponse {
+    optional string Err = 1;
+}

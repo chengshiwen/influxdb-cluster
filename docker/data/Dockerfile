@@ -1,0 +1,25 @@
+FROM buildpack-deps:stretch-curl
+
+ARG TARGETARCH
+ARG INFLUXDB_VERSION
+
+ENV INFLUXDB_VERSION=${INFLUXDB_VERSION}
+RUN set -ex && \
+    wget --no-verbose https://github.com/chengshiwen/influxdb-cluster/releases/download/v${INFLUXDB_VERSION}/influxdb-cluster_${INFLUXDB_VERSION}_static_linux_$TARGETARCH.tar.gz && \
+    mkdir -p /usr/src && \
+    tar -C /usr/src -xzf influxdb-cluster_${INFLUXDB_VERSION}_static_linux_$TARGETARCH.tar.gz && \
+    rm -f /usr/src/influxdb-cluster-*/influxd-* && \
+    rm -f /usr/src/influxdb-cluster-*/influxdb*.conf && \
+    chmod +x /usr/src/influxdb-cluster-*/* && \
+    cp -a /usr/src/influxdb-cluster-*/* /usr/bin/ && \
+    rm -rf *.tar.gz* /usr/src
+COPY influxdb.conf /etc/influxdb/influxdb.conf
+
+EXPOSE 8086
+
+VOLUME /var/lib/influxdb
+
+COPY entrypoint.sh /entrypoint.sh
+COPY init-influxdb.sh /init-influxdb.sh
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["influxd"]

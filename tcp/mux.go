@@ -79,7 +79,7 @@ func (mux *Mux) Serve(ln net.Listener) error {
 			continue
 		}
 		if err != nil {
-			mux.Logger.Printf("tcp.Mux: Listener at %s failed failed to accept a connection, closing all listeners - %s", ln.Addr(), err)
+			mux.Logger.Printf("tcp.Mux: Listener at %s failed to accept a connection, closing all listeners - %s", ln.Addr(), err)
 			// Wait for all connections to be demux
 			mux.wg.Wait()
 
@@ -195,7 +195,7 @@ func (mux *Mux) release(ln *listener) bool {
 			return true
 		}
 	}
-	return false
+	return ln == mux.defaultListener
 }
 
 // DefaultListener will return a net.Listener that will pass-through any
@@ -228,6 +228,9 @@ type listener struct {
 	// That way, anyone holding an RLock can release the lock by receiving from done.
 	done chan struct{}
 
+	// closer ensures that Close is idempotent.
+	closer sync.Once
+
 	mu sync.RWMutex
 	c  chan net.Conn
 }
@@ -249,7 +252,7 @@ func (ln *listener) Accept() (net.Conn, error) {
 func (ln *listener) Close() error {
 	if ok := ln.mux.release(ln); ok {
 		// Close done to signal to any RLock holders to release their lock.
-		close(ln.done)
+		ln.closer.Do(func() { close(ln.done) })
 
 		// Hold a lock while reassigning ln.c to nil
 		// so that attempted sends or receives will block forever.

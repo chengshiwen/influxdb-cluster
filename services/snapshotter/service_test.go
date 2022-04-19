@@ -23,6 +23,8 @@ import (
 )
 
 var data = meta.Data{
+	MetaNodes: []meta.NodeInfo{},
+	DataNodes: []meta.NodeInfo{},
 	Databases: []meta.DatabaseInfo{
 		{
 			Name: "db0",

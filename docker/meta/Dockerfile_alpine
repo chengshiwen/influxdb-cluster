@@ -1,0 +1,32 @@
+FROM alpine:3.14
+
+RUN echo 'hosts: files dns' >> /etc/nsswitch.conf
+RUN apk add --no-cache tzdata bash ca-certificates && \
+    update-ca-certificates
+
+ARG TARGETARCH
+ARG INFLUXDB_VERSION
+
+ENV INFLUXDB_VERSION=${INFLUXDB_VERSION}
+RUN set -ex && \
+    apk add --no-cache --virtual .build-deps wget tar && \
+    wget --no-verbose https://github.com/chengshiwen/influxdb-cluster/releases/download/v${INFLUXDB_VERSION}/influxdb-cluster_${INFLUXDB_VERSION}_static_linux_$TARGETARCH.tar.gz && \
+    mkdir -p /usr/src && \
+    tar -C /usr/src -xzf influxdb-cluster_${INFLUXDB_VERSION}_static_linux_$TARGETARCH.tar.gz && \
+    rm -f /usr/src/influxdb-cluster-*/influx && \
+    rm -f /usr/src/influxdb-cluster-*/influx_* && \
+    rm -f /usr/src/influxdb-cluster-*/influxd && \
+    rm -f /usr/src/influxdb-cluster-*/influxdb*.conf && \
+    chmod +x /usr/src/influxdb-cluster-*/* && \
+    cp -a /usr/src/influxdb-cluster-*/* /usr/bin/ && \
+    rm -rf *.tar.gz* /usr/src && \
+    apk del .build-deps
+COPY influxdb-meta.conf /etc/influxdb/influxdb-meta.conf
+
+EXPOSE 8091
+
+VOLUME /var/lib/influxdb
+
+COPY entrypoint.sh /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["influxd-meta"]

@@ -11,6 +11,29 @@ import (
 )
 
 const (
+	// DefaultDialTimeout is the duration for which the meta node waits for a connection to a
+	// remote data node before the meta node attempts to connect to a different remote data node.
+	// This setting applies to queries only.
+	DefaultDialTimeout = time.Second
+
+	// DefaultPoolMaxIdleStreams is the maximum number of idle RPC stream connections to
+	// retain in an idle pool between two nodes.
+	DefaultPoolMaxIdleStreams = 100
+
+	// DefaultPoolMaxIdleTime is the maximum time that a TCP connection to another data node
+	// remains idle in the connection pool.
+	DefaultPoolMaxIdleTime = time.Minute
+
+	// DefaultShardWriterTimeout is the default timeout set on shard writers.
+	DefaultShardWriterTimeout = 5 * time.Second
+
+	// DefaultShardMapperTimeout is the default timeout set on shard mappers.
+	DefaultShardMapperTimeout = 5 * time.Second
+
+	// DefaultMaxRemoteWriteConnections is the maximum number of open connections
+	// that will be available for remote writes to another host.
+	DefaultMaxRemoteWriteConnections = 3
+
 	// DefaultWriteTimeout is the default timeout for a complete write to succeed.
 	DefaultWriteTimeout = 10 * time.Second
 
@@ -25,39 +48,67 @@ const (
 	// DefaultMaxSelectSeriesN is the maximum number of series a SELECT can run.
 	// A value of zero will make the maximum series count unlimited.
 	DefaultMaxSelectSeriesN = 0
+
+	// DefaultMaxSelectBucketsN is the maximum number of group by time buckets a SELECT can create.
+	// A value of 0 will make the maximum number of buckets unlimited.
+	DefaultMaxSelectBucketsN = 0
 )
 
 // Config represents the configuration for the coordinator service.
 type Config struct {
-	WriteTimeout         toml.Duration `toml:"write-timeout"`
-	MaxConcurrentQueries int           `toml:"max-concurrent-queries"`
-	QueryTimeout         toml.Duration `toml:"query-timeout"`
-	LogQueriesAfter      toml.Duration `toml:"log-queries-after"`
-	MaxSelectPointN      int           `toml:"max-select-point"`
-	MaxSelectSeriesN     int           `toml:"max-select-series"`
-	MaxSelectBucketsN    int           `toml:"max-select-buckets"`
+	DialTimeout           toml.Duration `toml:"dial-timeout"`
+	PoolMaxIdleStreams    int           `toml:"pool-max-idle-streams"`
+	PoolMaxIdleTime       toml.Duration `toml:"pool-max-idle-time"`
+	AllowOutOfOrderWrites bool          `toml:"allow-out-of-order-writes"`
+	ShardReaderTimeout    toml.Duration `toml:"shard-reader-timeout"`
+	HTTPSEnabled          bool          `toml:"https-enabled"`
+	HTTPSCertificate      string        `toml:"https-certificate"`
+	HTTPSPrivateKey       string        `toml:"https-private-key"`
+	HTTPSInsecureTLS      bool          `toml:"https-insecure-tls"`
+	ClusterTracing        bool          `toml:"cluster-tracing"`
+	WriteTimeout          toml.Duration `toml:"write-timeout"`
+	MaxConcurrentQueries  int           `toml:"max-concurrent-queries"`
+	QueryTimeout          toml.Duration `toml:"query-timeout"`
+	LogQueriesAfter       toml.Duration `toml:"log-queries-after"`
+	MaxSelectPointN       int           `toml:"max-select-point"`
+	MaxSelectSeriesN      int           `toml:"max-select-series"`
+	MaxSelectBucketsN     int           `toml:"max-select-buckets"`
+
+	// Propagate the top-level bind-address and http bind-address down to dependent configs
+	RemoteBindAddress     string `toml:"-"`
+	RemoteHTTPBindAddress string `toml:"-"`
 }
 
 // NewConfig returns an instance of Config with defaults.
 func NewConfig() Config {
 	return Config{
+		DialTimeout:          toml.Duration(DefaultDialTimeout),
+		PoolMaxIdleStreams:   DefaultPoolMaxIdleStreams,
+		PoolMaxIdleTime:      toml.Duration(DefaultPoolMaxIdleTime),
 		WriteTimeout:         toml.Duration(DefaultWriteTimeout),
 		QueryTimeout:         toml.Duration(query.DefaultQueryTimeout),
 		MaxConcurrentQueries: DefaultMaxConcurrentQueries,
 		MaxSelectPointN:      DefaultMaxSelectPointN,
 		MaxSelectSeriesN:     DefaultMaxSelectSeriesN,
+		MaxSelectBucketsN:    DefaultMaxSelectBucketsN,
 	}
 }
 
 // Diagnostics returns a diagnostics representation of a subset of the Config.
 func (c Config) Diagnostics() (*diagnostics.Diagnostics, error) {
 	return diagnostics.RowFromMap(map[string]interface{}{
-		"write-timeout":          c.WriteTimeout,
-		"max-concurrent-queries": c.MaxConcurrentQueries,
-		"query-timeout":          c.QueryTimeout,
-		"log-queries-after":      c.LogQueriesAfter,
-		"max-select-point":       c.MaxSelectPointN,
-		"max-select-series":      c.MaxSelectSeriesN,
-		"max-select-buckets":     c.MaxSelectBucketsN,
+		"dial-timeout":              c.DialTimeout,
+		"pool-max-idle-streams":     c.PoolMaxIdleStreams,
+		"pool-max-idle-time":        c.PoolMaxIdleTime,
+		"allow-out-of-order-writes": c.AllowOutOfOrderWrites,
+		"shard-reader-timeout":      c.ShardReaderTimeout,
+		"cluster-tracing":           c.ClusterTracing,
+		"write-timeout":             c.WriteTimeout,
+		"max-concurrent-queries":    c.MaxConcurrentQueries,
+		"query-timeout":             c.QueryTimeout,
+		"log-queries-after":         c.LogQueriesAfter,
+		"max-select-point":          c.MaxSelectPointN,
+		"max-select-series":         c.MaxSelectSeriesN,
+		"max-select-buckets":        c.MaxSelectBucketsN,
 	}), nil
 }

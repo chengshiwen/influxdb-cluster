@@ -14,6 +14,28 @@ var (
 )
 
 var (
+	// ErrNodeExists is returned when creating an already existing node.
+	ErrNodeExists = errors.New("node already exists")
+
+	// ErrNodeNotFound is returned when mutating a node that doesn't exist.
+	ErrNodeNotFound = errors.New("node not found")
+
+	// ErrNodesRequired is returned when at least one node is required for an operation.
+	// This occurs when creating a shard group.
+	ErrNodesRequired = errors.New("at least one node required")
+
+	// ErrNodeIDRequired is returned when using a zero node id.
+	ErrNodeIDRequired = errors.New("node id must be greater than 0")
+
+	// ErrNodeUnableToDropFinalNode is returned if the node being dropped is the last
+	// node in the cluster
+	ErrNodeUnableToDropFinalNode = errors.New("unable to drop the final node in a cluster")
+
+	// ErrNodeUnableToDropNode is returned if the node is unable to drop in a cluster
+	ErrNodeUnableToDropNode = errors.New("unable to drop the node in a cluster")
+)
+
+var (
 	// ErrDatabaseExists is returned when creating an already existing database.
 	ErrDatabaseExists = errors.New("database already exists")
 

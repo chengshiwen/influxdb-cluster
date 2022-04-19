@@ -256,6 +256,7 @@ func TestData_TruncateShardGroups(t *testing.T) {
 		}
 	}
 
+	must(data.CreateDataNode("foo:8086", "bar:8088"))
 	must(data.CreateDatabase("db"))
 	rp := meta.NewRetentionPolicyInfo("rp")
 	rp.ShardGroupDuration = 24 * time.Hour

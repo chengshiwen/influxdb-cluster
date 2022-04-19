@@ -27,8 +27,8 @@ message Data {
 
 message NodeInfo {
 	required uint64 ID = 1;
-	required string Host = 2;
-	optional string TCPHost = 3;
+	optional string Addr = 2;
+	optional string TCPAddr = 3;
 }
 
 message DatabaseInfo {
@@ -136,6 +136,8 @@ message Command {
 		DeleteDataNodeCommand            = 28;
 		SetMetaNodeCommand               = 29;
 		DropShardCommand                 = 30;
+		TruncateShardGroupsCommand       = 31;
+		PruneShardGroupsCommand          = 32;
 	}
 
 	required Type type = 1;
@@ -180,6 +182,7 @@ message CreateRetentionPolicyCommand {
 	}
 	required string Database = 1;
 	required RetentionPolicyInfo RetentionPolicy = 2;
+	optional bool Default = 3;
 }
 
 message DropRetentionPolicyCommand {
@@ -207,6 +210,8 @@ message UpdateRetentionPolicyCommand {
 	optional string NewName = 3;
 	optional int64 Duration = 4;
 	optional uint32 ReplicaN = 5;
+	optional int64 ShardGroupDuration = 6;
+	optional bool Default = 7;
 }
 
 message CreateShardGroupCommand {
@@ -351,8 +356,8 @@ message UpdateDataNodeCommand {
 		optional UpdateDataNodeCommand command = 126;
 	}
 	required uint64 ID = 1;
-	required string Host = 2;
-	required string TCPHost = 3;
+	required string HTTPAddr = 2;
+	required string TCPAddr = 3;
 }
 
 message DeleteMetaNodeCommand {
@@ -391,4 +396,17 @@ message DropShardCommand {
 		optional DropShardCommand command = 130;
 	}
 	required uint64 ID = 1;
+}
+
+message TruncateShardGroupsCommand {
+	extend Command {
+		optional TruncateShardGroupsCommand command = 131;
+	}
+	required int64 Timestamp = 1;
+}
+
+message PruneShardGroupsCommand {
+	extend Command {
+		optional PruneShardGroupsCommand command = 132;
+	}
 }

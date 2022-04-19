@@ -354,7 +354,7 @@ func TestMonitor_Expvar(t *testing.T) {
 		var found1, found3 bool
 		for _, pt := range points {
 			if bytes.Equal(pt.Name(), []byte("expvar1")) {
-				if got, want := pt.Tags().HashKey(), []byte(fmt.Sprintf(",hostname=%s,region=uswest2", hostname)); !reflect.DeepEqual(got, want) {
+				if got, want := pt.Tags().HashKey(), []byte(fmt.Sprintf(",clusterID=0,hostname=%s,nodeID=0,region=uswest2", hostname)); !reflect.DeepEqual(got, want) {
 					t.Errorf("unexpected expvar1 tags: got=%v want=%v", string(got), string(want))
 				}
 				fields, _ := pt.Fields()
@@ -367,7 +367,7 @@ func TestMonitor_Expvar(t *testing.T) {
 			} else if bytes.Equal(pt.Name(), []byte("expvar2")) {
 				t.Error("found expvar2 statistic")
 			} else if bytes.Equal(pt.Name(), []byte("expvar3")) {
-				if got, want := pt.Tags().HashKey(), []byte(fmt.Sprintf(",hostname=%s", hostname)); !reflect.DeepEqual(got, want) {
+				if got, want := pt.Tags().HashKey(), []byte(fmt.Sprintf(",clusterID=0,hostname=%s,nodeID=0", hostname)); !reflect.DeepEqual(got, want) {
 					t.Errorf("unexpected expvar3 tags: got=%v want=%v", string(got), string(want))
 				}
 				fields, _ := pt.Fields()
@@ -466,8 +466,18 @@ func (pw *PointsWriter) WritePoints(database, policy string, points models.Point
 }
 
 type MetaClient struct {
+	ClusterIDFn                         func() uint64
+	NodeIDFn                            func() uint64
 	CreateDatabaseWithRetentionPolicyFn func(name string, spec *meta.RetentionPolicySpec) (*meta.DatabaseInfo, error)
 	DatabaseFn                          func(name string) *meta.DatabaseInfo
+}
+
+func (m *MetaClient) ClusterID() uint64 {
+	return 0
+}
+
+func (m *MetaClient) NodeID() uint64 {
+	return 0
 }
 
 func (m *MetaClient) CreateDatabaseWithRetentionPolicy(name string, spec *meta.RetentionPolicySpec) (*meta.DatabaseInfo, error) {

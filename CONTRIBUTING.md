@@ -1,11 +1,11 @@
-Contributing to InfluxDB
+Contributing to InfluxDB Cluster
 ========================
 
 Bug reports
 ---------------
 Before you file an issue, please search existing issues in case it has already been filed, or perhaps even fixed. If you file an issue, please include the following.
 * Full details of your operating system (or distribution) e.g. 64-bit Ubuntu 14.04.
-* The version of InfluxDB you are running
+* The version of InfluxDB Cluster you are running
 * Whether you installed it using a pre-built package, or built it from source.
 * A small test case, if applicable, that demonstrates the issues.
 
@@ -32,22 +32,20 @@ curl -X POST http://localhost:8086/query  --data-urlencode 'db=mydb' --data-urle
 ```
 **If you don't include a clear test case like this, your issue may not be investigated, and may even be closed**. If writing the data is too difficult, please zip up your data directory and include a link to it in your bug report.
 
-Please note that issues are *not the place to file general questions* such as "how do I use collectd with InfluxDB?" Questions of this nature should be sent to the [InfluxData Community](https://community.influxdata.com/), not filed as issues. Issues like this will be closed.
-
 Feature requests
 ---------------
-We really like to receive feature requests, as it helps us prioritize our work. Please be clear about your requirements, as incomplete feature requests may simply be closed if we don't understand what you would like to see added to InfluxDB.
+We really like to receive feature requests, as it helps us prioritize our work. Please be clear about your requirements, as incomplete feature requests may simply be closed if we don't understand what you would like to see added to InfluxDB Cluster.
 
 Contributing to the source code
 ---------------
 
-InfluxDB follows standard Go project structure. This means that all your Go development are done in `$GOPATH/src`. GOPATH can be any directory under which InfluxDB and all its dependencies will be cloned. For full details on the project structure, follow along below.
+InfluxDB Cluster follows standard Go project structure. This means that all your Go development are done in `$GOPATH/src`. GOPATH can be any directory under which InfluxDB Cluster and all its dependencies will be cloned. For full details on the project structure, follow along below.
 
-You should also read our [coding guide](https://github.com/influxdata/influxdb/blob/master/CODING_GUIDELINES.md), to understand better how to write code for InfluxDB.
+You should also read our [coding guide](https://github.com/chengshiwen/influxdb-cluster/blob/master/CODING_GUIDELINES.md), to understand better how to write code for InfluxDB Cluster.
 
 Submitting a pull request
 ------------
-To submit a pull request you should fork the InfluxDB repository, and make your change on a feature branch of your fork. Then generate a pull request from your branch against *master* of the InfluxDB repository. Include in your pull request details of your change -- the why *and* the how -- as well as the testing your performed. Also, be sure to run the test suite with your change in place. Changes that cause tests to fail cannot be merged.
+To submit a pull request you should fork the InfluxDB Cluster repository, and make your change on a feature branch of your fork. Then generate a pull request from your branch against *master* of the InfluxDB Cluster repository. Include in your pull request details of your change -- the why *and* the how -- as well as the testing your performed. Also, be sure to run the test suite with your change in place. Changes that cause tests to fail cannot be merged.
 
 There will usually be some back and forth as we finalize the change, but once that completes it may be merged.
 
@@ -57,28 +55,20 @@ To assist in review for the PR, please add the following to your pull request co
 - [ ] CHANGELOG.md updated
 - [ ] Rebased/mergable
 - [ ] Tests pass
-- [ ] Sign [CLA](https://influxdata.com/community/cla/) (if not already signed)
 ```
-
-Signing the CLA
----------------
-
-If you are going to be contributing back to InfluxDB please take a
-second to sign our CLA, which can be found
-[on our website](https://influxdata.com/community/cla/).
 
 Installing Go
 -------------
-InfluxDB requires Go 1.13
+InfluxDB Cluster requires Go 1.16
 
-At InfluxDB we find gvm, a Go version manager, useful for installing Go. For instructions
+At InfluxDB Cluster we find gvm, a Go version manager, useful for installing Go. For instructions
 on how to install it see [the gvm page on github](https://github.com/moovweb/gvm).
 
 After installing gvm you can install and set the default go version by
 running the following:
 
-    gvm install go1.13
-    gvm use go1.13 --default
+    gvm install go1.16
+    gvm use go1.16 --default
 
 Revision Control Systems
 -------------
@@ -95,23 +85,19 @@ Setup the project structure and fetch the repo like so:
 ```bash
     mkdir $HOME/gocodez
     export GOPATH=$HOME/gocodez
-    go get github.com/influxdata/influxdb
+    go get github.com/chengshiwen/influxdb-cluster
 ```
 
 You can add the line `export GOPATH=$HOME/gocodez` to your bash/zsh file to be set for every shell instead of having to manually run it everytime.
 
 Cloning a fork
 -------------
-If you wish to work with fork of InfluxDB, your own fork for example, you must still follow the directory structure above. But instead of cloning the main repo, instead clone your fork. Follow the steps below to work with a fork:
+If you wish to work with fork of InfluxDB Cluster, your own fork for example, you must still follow the directory structure above. But instead of cloning the main repo, instead clone your fork. Follow the steps below to work with a fork:
 
 ```bash
     export GOPATH=$HOME/gocodez
-    mkdir -p $GOPATH/src/github.com/influxdata
-    cd $GOPATH/src/github.com/influxdata
-    git clone git@github.com:<username>/influxdb
+    git clone git@github.com:<username>/influxdb-cluster
 ```
-
-Retaining the directory structure `$GOPATH/src/github.com/influxdata` is necessary so that Go imports work correctly.
 
 Build and Test
 -----
@@ -122,7 +108,13 @@ To then build and install the binaries, run the following command.
 go clean ./...
 go install ./...
 ```
-The binaries will be located in `$GOPATH/bin`. Please note that the InfluxDB binary is named `influxd`, not `influxdb`.
+The binaries will be located in `$GOPATH/bin`, including `influxd`, `influxd-meta` and `influxd-ctl`.
+
+Or specify the directory of binaries by setting `GOBIN`.
+
+```
+GOBIN=$(PWD)/build go install ./...
+```
 
 To set the version and commit flags during the build pass the following to the **install** command:
 
@@ -137,14 +129,19 @@ If you want to build packages, see `build.py` usage information:
 ```bash
 python build.py --help
 
+# Or to run the build utility via Docker
+# bash build.sh --help
+
 # Or to build a package for your current system
-python build.py --package
+bash build.sh --package
+
+# Or to build all release packages by specifying the platform, arch, branch and version
+bash build.sh --platform all --arch all --branch master --version 1.8.10-c1.0.0 --clean --release --package
 ```
 
 To run the tests, execute the following command:
 
 ```bash
-cd $GOPATH/src/github.com/influxdata/influxdb
 go test -v ./...
 
 # run tests that match some pattern
@@ -159,12 +156,27 @@ To install go cover, run the following command:
 go get golang.org/x/tools/cmd/cover
 ```
 
+Build and Push Multi-Arch Docker Images
+-----------------
+
+To build and push multi-arch docker images, run the following command:
+
+```bash
+INFLUXDB_VERSION=1.8.10-c1.0.0
+cd docker/data
+docker buildx build --platform linux/amd64,linux/arm64 --build-arg INFLUXDB_VERSION=${INFLUXDB_VERSION} --push -f Dockerfile -t chengshiwen/influxdb:${INFLUXDB_VERSION}-data .
+docker buildx build --platform linux/amd64,linux/arm64 --build-arg INFLUXDB_VERSION=${INFLUXDB_VERSION} --push -f Dockerfile_alpine -t chengshiwen/influxdb:${INFLUXDB_VERSION}-data-alpine .
+cd ../meta
+docker buildx build --platform linux/amd64,linux/arm64 --build-arg INFLUXDB_VERSION=${INFLUXDB_VERSION} --push -f Dockerfile -t chengshiwen/influxdb:${INFLUXDB_VERSION}-meta .
+docker buildx build --platform linux/amd64,linux/arm64 --build-arg INFLUXDB_VERSION=${INFLUXDB_VERSION} --push -f Dockerfile_alpine -t chengshiwen/influxdb:${INFLUXDB_VERSION}-meta-alpine .
+```
+
 Generated Google Protobuf code
 -----------------
 Most changes to the source do not require that the generated protocol buffer code be changed. But if you need to modify the protocol buffer code, you'll first need to install the protocol buffers toolchain.
 
 First install the [protocol buffer compiler](https://developers.google.com/protocol-buffers/
-) 2.6.1 or later for your OS:
+) 3.x or later for your OS:
 
 Then install the go plugins:
 
@@ -215,7 +227,7 @@ Pre-commit checks
 
 We have a pre-commit hook to make sure code is formatted properly and vetted before you commit any changes. We strongly recommend using the pre-commit hook to guard against accidentally committing unformatted code. To use the pre-commit hook, run the following:
 ```bash
-    cd $GOPATH/src/github.com/influxdata/influxdb
+    cd $GOPATH/src/github.com/chengshiwen/influxdb-cluster
     cp .hooks/pre-commit .git/hooks/
 ```
 In case the commit is rejected because it's not formatted you can run
@@ -237,7 +249,7 @@ For more information on `go vet`, [read the GoDoc](https://godoc.org/golang.org/
 
 Profiling
 -----
-When troubleshooting problems with CPU or memory the Go toolchain can be helpful. You can start InfluxDB with CPU and memory profiling turned on. For example:
+When troubleshooting problems with CPU or memory the Go toolchain can be helpful. You can start InfluxDB Cluster with CPU and memory profiling turned on. For example:
 
 ```sh
 # start influx with profiling
@@ -263,20 +275,13 @@ func BenchmarkSomething(b *testing.B) {
 }
 ```
 
-Continuous Integration testing
------
-InfluxDB uses CircleCI for continuous integration testing. CircleCI executes [test.sh](https://github.com/influxdata/influxdb/blob/master/test.sh), so you may do the same on your local development environment before creating a pull request.
-
-The `test.sh` script executes a test suite with 5 variants (standard 64 bit, 64 bit with race detection, 32 bit, TSI, go version 1.12), each executes with a different arg, 0 through 4. Unless you know differently, `./test.sh 0` is probably all you need.
-
-
 Distributions
 -----
 
 You can build distributions such as `.deb` and `.rpm` files using the scripts in the `releng` directory.
 
 For example, we'll build a distribution for 64-bit Linux.
-From the `influxdb` source directory, first build the source tarball:
+From the `influxdb-cluster` source directory, first build the source tarball:
 
 ```sh
 $ ./releng/source-tarball/build.bash -p `pwd` -s $COMMIT -b $BRANCH -v vX.Y.Z -o $OUTDIR/src
@@ -285,13 +290,13 @@ $ ./releng/source-tarball/build.bash -p `pwd` -s $COMMIT -b $BRANCH -v vX.Y.Z -o
 Then build the raw binaries:
 
 ```sh
-$ GOOS=linux GOARCH=amd64 ./releng/raw-binaries/build.bash -i $OUTDIR/src/influxdb-src-$COMMIT.tar.gz -o $OUTDIR/bin
+$ GOOS=linux GOARCH=amd64 ./releng/raw-binaries/build.bash -i $OUTDIR/src/influxdb-cluster-src-$COMMIT.tar.gz -o $OUTDIR/bin
 ```
 
 Then build the full distribution using the source and binary tarballs:
 
 ```sh
-$ ./releng/packages/build.bash -s $OUTDIR/src/influxdb-src-$COMMIT.tar.gz -b $OUTDIR/bin/influxdb_bin_linux_amd64-$COMMIT.tar.gz -O linux -A amd64 -o $OUTDIR/dist
+$ ./releng/packages/build.bash -s $OUTDIR/src/influxdb-cluster-src-$COMMIT.tar.gz -b $OUTDIR/bin/influxdb-cluster_bin_linux_amd64-$COMMIT.tar.gz -O linux -A amd64 -o $OUTDIR/dist
 ```
 
 You should find your `.deb`, `.rpm`, and `.tar.gz` distribution files in the `$OUTDIR/dist` directory.

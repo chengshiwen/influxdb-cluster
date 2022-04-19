@@ -1,18 +1,25 @@
-### Welcome to the InfluxDB configuration file.
+### Welcome to the InfluxDB Cluster configuration file.
 
 # The values in this file override the default values used by the system if
 # a config option is not specified. The commented out lines are the configuration
 # field and the default value used. Uncommenting a line and changing the value
 # will change the value used at runtime when the process is restarted.
 
-# Once every 24 hours InfluxDB will report usage data to usage.influxdata.com
+# Once every 24 hours InfluxDB Cluster will report usage data in log output
 # The data includes a random ID, os, arch, version, the number of series and other
 # usage data. No data from user databases is ever transmitted.
 # Change this option to true to disable reporting.
 # reporting-disabled = false
 
-# Bind address to use for the RPC service for backup and restore.
-# bind-address = "127.0.0.1:8088"
+# The TCP bind address to use for cluster-internal services.
+# bind-address = ":8088"
+
+# Hostname advertised by this host for remote addresses. This must be resolvable by all
+# other nodes in the cluster.
+# hostname = "localhost"
+
+# How often to update the cluster with this node's internal status.
+# gossip-frequency = "3s"
 
 ###
 ### [meta]
@@ -22,8 +29,23 @@
 ###
 
 [meta]
-  # Where the metadata/raft database is stored
+  # Directory where the cluster metadata is stored.
   dir = "/var/lib/influxdb/meta"
+
+  # Whether to use TLS when connecting to meta nodes.
+  # meta-tls-enabled = false
+
+  # The shared secret used by the internal API for JWT authentication. This setting 
+  # must have the same value as the meta nodes' meta.auth-enabled configuration.
+  # meta-auth-enabled = false
+
+  # This setting must have the same value as the meta nodes' meta.internal-shared-secret configuration
+  # and must be non-empty if set.
+  # meta-internal-shared-secret = ""
+
+  # Allows insecure TLS connections to meta nodes.  This is useful when testing with self-
+  # signed certificates.
+  # meta-insecure-tls = false
 
   # Automatically create a default retention policy when creating a database.
   # retention-autocreate = true
@@ -159,6 +181,43 @@
 ###
 
 [coordinator]
+  # The default timeout when establishing a new connection to a node.
+  # dial-timeout = "1s"
+
+  # The default time a stream will remain idle in the connection pool before being reaped.
+  # pool-max-idle-time = "60s"
+
+  # The default maximum number of streams that can be idle in a pool, per node.
+  # The number of active streams can exceed the maximum, but they will not return to the pool when released.
+  # pool-max-idle-streams = 100
+
+  # By default, this option is set to false and writes are processed in the order that they are received.
+  # This means if any points are in the hinted handoff (HH) queue for a shard, all incoming points must go into the HH queue.
+  # If true, writes may process in a different order than they were received.
+  # This can reduce the time required to drain the HH queue and increase throughput during recovery.
+  # allow-out-of-order-writes = false
+
+  # The default timeout set on shard readers.
+  # shard-reader-timeout = "0"
+
+  # Determines whether data nodes use HTTPS to communicate with each other.
+  # https-enabled = false
+
+  # The SSL certificate to use when HTTPS is enabled.  The certificate should be a PEM encoded
+  # bundle of the certificate and key.  If it is just the certificate, a key must be
+  # specified in https-private-key.
+  # https-certificate = ""
+
+  # Use a separate private key location.
+  # https-private-key = ""
+
+  # Whether data nodes will skip certificate validation communicating with each other over HTTPS.
+  # This is useful when testing with self-signed certificates.
+  # https-insecure-tls = false
+
+  # Enables cluster trace logging.
+  # cluster-tracing = false
+
   # The default time a write request will wait until a "timeout" error is returned to the caller.
   # write-timeout = "10s"
 
@@ -238,6 +297,9 @@
 
   # The interval at which to record statistics
   # store-interval = "10s"
+
+  # How often to poll other data nodes' stats when aggregating cluster stats.
+  # remote-collect-interval = "10s"
 
 ###
 ### [http]
@@ -343,7 +405,7 @@
 
   # The maximum duration for a write to wait in the queue to be processed.
   # Setting this to 0 or setting max-concurrent-write-limit to 0 disables the limit.
-  # enqueued-write-timeout = 0
+  # enqueued-write-timeout = "30s"
 
 	# User supplied HTTP response headers
 	#
@@ -490,6 +552,7 @@
   # "join" will parse and store the multi-value plugin as a single multi-value measurement.
   # "split" is the default behavior for backward compatibility with previous versions of influxdb.
   # parse-multivalue-plugin = "split"
+
 ###
 ### [opentsdb]
 ###
@@ -576,6 +639,76 @@
 ###
 ### Global configuration settings for TLS in InfluxDB.
 ###
+
+###
+### [hinted-handoff]
+###
+### Settings for how write data is queued locally when the remote node is unable to accept a write.
+###
+
+[hinted-handoff]
+# Determines whether hinted handoff is enabled.
+# enabled = true
+
+# The directory where the hinted handoff queues are stored.
+dir = "/var/lib/influxdb/hh"
+
+# The default maximum size of all hinted handoff queues in bytes.
+# max-size = "10g"
+
+# The default maximum amount of time that a hinted handoff write can stay in the queue.
+# After this time, the write will be purged.
+# max-age = "168h0m0s"
+
+# The maximum number of concurrent queued writes to process at a time.
+# retry-concurrency = 20
+
+# The default rate that hinted handoffs will be retried.  The rate is in bytes per second
+# and applies across all nodes when retried.   A value of 0 disables the rate limit.
+# retry-rate-limit = 0
+
+# The default amount of time the system waits before attempting to flush hinted handoff
+# queues. With each failure of a hinted handoff write, this retry interval increases
+# exponentially until it reaches the maximum.
+# retry-interval = "1s"
+
+# The maximum the hinted handoff retry interval will ever be.
+# retry-max-interval = "10s"
+
+# The amount of time the system waits before attempting to purge hinted handoff data due
+# to age or inactive nodes.
+# purge-interval = "1m0s"
+
+# Maximum number of bytes to write to a shard in a single request
+# batch-size = 512000
+
+# Maximum number of writes into the hinted-handoff queue that can be pending.
+# This is writes incoming to the hh queue, not outbound from the queue.
+# max-pending-writes = 1024
+
+###
+### [anti-entropy]
+###
+### Controls the copying and repairing of shards to ensure that data nodes contain
+### the shard data they are supposed to. The Anti-Entropy feature is disabled by
+### default.
+
+[anti-entropy]
+# Determines whether the service is enabled.
+# enabled = false
+
+# The interval of time when anti-entropy checks run on each data node.
+# check-interval = "5m"
+
+# The maximum number of shards that a single data node will copy or repair
+# concurrently.
+# max-fetch = 10
+
+# How many concurrent sync operations should be performed.
+# max-sync = 1
+
+# When set to true, missing shards will be automatically repaired.
+# auto-repair-missing = true
 
 [tls]
   # Determines the available set of cipher suites. See https://golang.org/pkg/crypto/tls/#pkg-constants

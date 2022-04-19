@@ -19,8 +19,9 @@ import (
 
 // Handler is an http.Handler for the OpenTSDB service.
 type Handler struct {
-	Database        string
-	RetentionPolicy string
+	Database         string
+	RetentionPolicy  string
+	ConsistencyLevel models.ConsistencyLevel
 
 	PointsWriter interface {
 		WritePointsPrivileged(database, retentionPolicy string, consistencyLevel models.ConsistencyLevel, points []models.Point) error
@@ -125,7 +126,7 @@ func (h *Handler) servePut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write points.
-	if err := h.PointsWriter.WritePointsPrivileged(h.Database, h.RetentionPolicy, models.ConsistencyLevelAny, points); influxdb.IsClientError(err) {
+	if err := h.PointsWriter.WritePointsPrivileged(h.Database, h.RetentionPolicy, h.ConsistencyLevel, points); influxdb.IsClientError(err) {
 		h.Logger.Info("Write series error", zap.Error(err))
 		http.Error(w, "write series error: "+err.Error(), http.StatusBadRequest)
 		return

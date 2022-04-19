@@ -17,12 +17,18 @@ type MetaClient interface {
 	CreateUser(name, password string, admin bool) (meta.User, error)
 	Database(name string) *meta.DatabaseInfo
 	Databases() []meta.DatabaseInfo
+	DataNode(id uint64) (*meta.NodeInfo, error)
+	DataNodes() []meta.NodeInfo
+	DeleteDataNode(id uint64) error
+	DeleteMetaNode(id uint64) error
 	DropShard(id uint64) error
 	DropContinuousQuery(database, name string) error
 	DropDatabase(name string) error
 	DropRetentionPolicy(database, name string) error
 	DropSubscription(database, rp, name string) error
 	DropUser(name string) error
+	MetaNodes() []meta.NodeInfo
+	NodeID() uint64
 	RetentionPolicy(database, name string) (rpi *meta.RetentionPolicyInfo, err error)
 	SetAdminPrivilege(username string, admin bool) error
 	SetPrivilege(username, database string, p influxql.Privilege) error

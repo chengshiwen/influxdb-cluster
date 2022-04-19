@@ -18,7 +18,7 @@ type MetaClient struct {
 	DatabaseFn                          func(name string) *meta.DatabaseInfo
 	DatabasesFn                         func() []meta.DatabaseInfo
 	DataNodeFn                          func(id uint64) (*meta.NodeInfo, error)
-	DataNodesFn                         func() ([]meta.NodeInfo, error)
+	DataNodesFn                         func() []meta.NodeInfo
 	DeleteDataNodeFn                    func(id uint64) error
 	DeleteMetaNodeFn                    func(id uint64) error
 	DropContinuousQueryFn               func(database, name string) error
@@ -27,7 +27,8 @@ type MetaClient struct {
 	DropSubscriptionFn                  func(database, rp, name string) error
 	DropShardFn                         func(id uint64) error
 	DropUserFn                          func(name string) error
-	MetaNodesFn                         func() ([]meta.NodeInfo, error)
+	MetaNodesFn                         func() []meta.NodeInfo
+	NodeIDFn                            func() uint64
 	RetentionPolicyFn                   func(database, name string) (rpi *meta.RetentionPolicyInfo, err error)
 	SetAdminPrivilegeFn                 func(username string, admin bool) error
 	SetPrivilegeFn                      func(username, database string, p influxql.Privilege) error
@@ -80,7 +81,7 @@ func (c *MetaClient) DataNode(id uint64) (*meta.NodeInfo, error) {
 	return c.DataNodeFn(id)
 }
 
-func (c *MetaClient) DataNodes() ([]meta.NodeInfo, error) {
+func (c *MetaClient) DataNodes() []meta.NodeInfo {
 	return c.DataNodesFn()
 }
 
@@ -112,8 +113,12 @@ func (c *MetaClient) DropUser(name string) error {
 	return c.DropUserFn(name)
 }
 
-func (c *MetaClient) MetaNodes() ([]meta.NodeInfo, error) {
+func (c *MetaClient) MetaNodes() []meta.NodeInfo {
 	return c.MetaNodesFn()
+}
+
+func (c *MetaClient) NodeID() uint64 {
+	return c.NodeIDFn()
 }
 
 func (c *MetaClient) RetentionPolicy(database, name string) (rpi *meta.RetentionPolicyInfo, err error) {

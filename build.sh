@@ -13,9 +13,6 @@ docker build -f Dockerfile_build_ubuntu64 -t influxdb-builder $DIR
 echo "Running build.py"
 # Run docker
 docker run --rm \
-    -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
-    -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
-    -v $HOME/.aws.conf:/root/.aws.conf \
     -v $DIR:/root/influxdb \
     influxdb-builder \
     "$@"

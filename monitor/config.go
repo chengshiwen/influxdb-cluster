@@ -18,21 +18,26 @@ const (
 
 	// DefaultStoreInterval is the period between storing gathered information.
 	DefaultStoreInterval = 10 * time.Second
+
+	// DefaultRemoteCollectInterval is the time interval to poll other data nodes' stats when aggregating cluster stats.
+	DefaultRemoteCollectInterval = 10 * time.Second
 )
 
 // Config represents the configuration for the monitor service.
 type Config struct {
-	StoreEnabled  bool          `toml:"store-enabled"`
-	StoreDatabase string        `toml:"store-database"`
-	StoreInterval toml.Duration `toml:"store-interval"`
+	StoreEnabled          bool          `toml:"store-enabled"`
+	StoreDatabase         string        `toml:"store-database"`
+	StoreInterval         toml.Duration `toml:"store-interval"`
+	RemoteCollectInterval toml.Duration `toml:"remote-collect-interval"`
 }
 
 // NewConfig returns an instance of Config with defaults.
 func NewConfig() Config {
 	return Config{
-		StoreEnabled:  DefaultStoreEnabled,
-		StoreDatabase: DefaultStoreDatabase,
-		StoreInterval: toml.Duration(DefaultStoreInterval),
+		StoreEnabled:          DefaultStoreEnabled,
+		StoreDatabase:         DefaultStoreDatabase,
+		StoreInterval:         toml.Duration(DefaultStoreInterval),
+		RemoteCollectInterval: toml.Duration(DefaultRemoteCollectInterval),
 	}
 }
 

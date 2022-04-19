@@ -1,3 +1,10 @@
+v1.8.10-c1.0.0 [2022-04-20]
+-------------------
+
+### Features
+
+-	Release InfluxDB Cluster based on [InfluxDB Enterprise](https://docs.influxdata.com/enterprise_influxdb/v1.8/), [InfluxDB v1.8.10](https://github.com/influxdata/influxdb/tree/v1.8.10) and [InfluxDB v0.11.1](https://github.com/influxdata/influxdb/tree/v0.11.1)
+
 v1.8.11 [unreleased]
 -------------------
 

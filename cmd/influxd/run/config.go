@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/influxdata/influxdb/coordinator"
@@ -16,9 +17,11 @@ import (
 	"github.com/influxdata/influxdb/monitor"
 	"github.com/influxdata/influxdb/monitor/diagnostics"
 	"github.com/influxdata/influxdb/pkg/tlsconfig"
+	"github.com/influxdata/influxdb/services/ae"
 	"github.com/influxdata/influxdb/services/collectd"
 	"github.com/influxdata/influxdb/services/continuous_querier"
 	"github.com/influxdata/influxdb/services/graphite"
+	"github.com/influxdata/influxdb/services/hh"
 	"github.com/influxdata/influxdb/services/httpd"
 	"github.com/influxdata/influxdb/services/meta"
 	"github.com/influxdata/influxdb/services/opentsdb"
@@ -34,7 +37,10 @@ import (
 
 const (
 	// DefaultBindAddress is the default address for various RPC services.
-	DefaultBindAddress = "127.0.0.1:8088"
+	DefaultBindAddress = ":8088"
+
+	// DefaultGossipFrequency is the default frequency to update the cluster with this node’s internal status.
+	DefaultGossipFrequency = 3 * time.Second
 )
 
 // Config represents the configuration format for the influxd binary.
@@ -55,12 +61,21 @@ type Config struct {
 	UDPInputs      []udp.Config      `toml:"udp"`
 
 	ContinuousQuery continuous_querier.Config `toml:"continuous_queries"`
+	HintedHandoff   hh.Config                 `toml:"hinted-handoff"`
+	AntiEntropy     ae.Config                 `toml:"anti-entropy"`
 
 	// Server reporting
 	ReportingDisabled bool `toml:"reporting-disabled"`
 
-	// BindAddress is the address that all TCP services use (Raft, Snapshot, Cluster, etc.)
+	// BindAddress is the address that all TCP services use (Snapshot, Cluster, etc.)
 	BindAddress string `toml:"bind-address"`
+
+	// Hostname is the hostname portion to use when registering local
+	// addresses.  This hostname must be resolvable from other nodes.
+	Hostname string `toml:"hostname"`
+
+	// GossipFrequency is frequency to update the cluster with this node’s internal status.
+	GossipFrequency itoml.Duration `toml:"gossip-frequency"`
 
 	// TLS provides configuration options for all https endpoints.
 	TLS tlsconfig.Config `toml:"tls"`
@@ -86,7 +101,10 @@ func NewConfig() *Config {
 
 	c.ContinuousQuery = continuous_querier.NewConfig()
 	c.Retention = retention.NewConfig()
+	c.HintedHandoff = hh.NewConfig()
+	c.AntiEntropy = ae.NewConfig()
 	c.BindAddress = DefaultBindAddress
+	c.GossipFrequency = itoml.Duration(DefaultGossipFrequency)
 
 	return c
 }
@@ -109,6 +127,7 @@ func NewDemoConfig() (*Config, error) {
 	c.Meta.Dir = filepath.Join(homeDir, ".influxdb/meta")
 	c.Data.Dir = filepath.Join(homeDir, ".influxdb/data")
 	c.Data.WALDir = filepath.Join(homeDir, ".influxdb/wal")
+	c.HintedHandoff.Dir = filepath.Join(homeDir, ".influxdb/hh")
 
 	return c, nil
 }
@@ -177,6 +196,14 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if err := c.HintedHandoff.Validate(); err != nil {
+		return err
+	}
+
+	if err := c.AntiEntropy.Validate(); err != nil {
+		return err
+	}
+
 	for _, graphite := range c.GraphiteInputs {
 		if err := graphite.Validate(); err != nil {
 			return fmt.Errorf("invalid graphite config: %v", err)
@@ -206,6 +233,8 @@ func (c *Config) Diagnostics() (*diagnostics.Diagnostics, error) {
 	return diagnostics.RowFromMap(map[string]interface{}{
 		"reporting-disabled": c.ReportingDisabled,
 		"bind-address":       c.BindAddress,
+		"hostname":           c.Hostname,
+		"gossip-frequency":   c.GossipFrequency,
 	}), nil
 }
 
@@ -225,6 +254,8 @@ func (c *Config) diagnosticsClients() map[string]diagnostics.Client {
 		"config-httpd":      c.HTTPD,
 
 		"config-cqs": c.ContinuousQuery,
+		"config-hh":  c.HintedHandoff,
+		"config-ae":  c.AntiEntropy,
 	}
 
 	// Config settings that can be repeated and can be disabled.

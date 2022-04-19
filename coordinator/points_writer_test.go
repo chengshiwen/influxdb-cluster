@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/coordinator"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/services/meta"
@@ -318,11 +317,25 @@ func TestPointsWriter_WritePoints(t *testing.T) {
 		// lock on the write increment since these functions get called in parallel
 		var mu sync.Mutex
 
+		sw := &fakeShardWriter{
+			ShardWriteFn: func(shardID, nodeID uint64, points []models.Point) error {
+				mu.Lock()
+				defer mu.Unlock()
+				return theTest.err[int(nodeID)-1]
+			},
+		}
+
 		store := &fakeStore{
 			WriteFn: func(shardID uint64, points []models.Point) error {
 				mu.Lock()
 				defer mu.Unlock()
 				return theTest.err[0]
+			},
+		}
+
+		hh := &fakeShardWriter{
+			ShardWriteFn: func(shardID, nodeID uint64, points []models.Point) error {
+				return nil
 			},
 		}
 
@@ -339,9 +352,11 @@ func TestPointsWriter_WritePoints(t *testing.T) {
 
 		c := coordinator.NewPointsWriter()
 		c.MetaClient = ms
+		c.ShardWriter = sw
 		c.TSDBStore = store
+		c.HintedHandoff = hh
+		c.Subscriber = sub
 		c.AddWriteSubscriber(sub.Points())
-		c.Node = &influxdb.Node{ID: 1}
 
 		c.Open()
 		defer c.Close()
@@ -417,7 +432,6 @@ func TestPointsWriter_WritePoints_Dropped(t *testing.T) {
 	c.MetaClient = ms
 	c.TSDBStore = store
 	c.AddWriteSubscriber(sub.Points())
-	c.Node = &influxdb.Node{ID: 1}
 
 	c.Open()
 	defer c.Close()
@@ -547,6 +561,14 @@ func TestBufferedPointsWriter(t *testing.T) {
 }
 
 var shardID uint64
+
+type fakeShardWriter struct {
+	ShardWriteFn func(shardID, nodeID uint64, points []models.Point) error
+}
+
+func (f *fakeShardWriter) WriteShard(shardID, nodeID uint64, points []models.Point) error {
+	return f.ShardWriteFn(shardID, nodeID, points)
+}
 
 type fakeStore struct {
 	WriteFn       func(shardID uint64, points []models.Point) error

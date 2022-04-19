@@ -45,14 +45,15 @@ func (c *tcpConnection) Close() {
 
 // Service represents a Graphite service.
 type Service struct {
-	bindAddress     string
-	database        string
-	retentionPolicy string
-	protocol        string
-	batchSize       int
-	batchPending    int
-	batchTimeout    time.Duration
-	udpReadBuffer   int
+	bindAddress      string
+	database         string
+	retentionPolicy  string
+	protocol         string
+	batchSize        int
+	batchPending     int
+	batchTimeout     time.Duration
+	consistencyLevel models.ConsistencyLevel
+	udpReadBuffer    int
 
 	batcher *tsdb.PointBatcher
 	parser  *Parser
@@ -110,6 +111,12 @@ func NewService(c Config) (*Service, error) {
 		tcpConnections:  make(map[string]*tcpConnection),
 		diagsKey:        strings.Join([]string{"graphite", d.Protocol, d.BindAddress}, ":"),
 	}
+
+	consistencyLevel, err := models.ParseConsistencyLevel(d.ConsistencyLevel)
+	if err != nil {
+		return nil, err
+	}
+	s.consistencyLevel = consistencyLevel
 
 	parser, err := NewParserWithOptions(Options{
 		Templates:   d.Templates,
@@ -458,7 +465,7 @@ func (s *Service) processBatches(batcher *tsdb.PointBatcher) {
 				continue
 			}
 
-			if err := s.PointsWriter.WritePointsPrivileged(s.database, s.retentionPolicy, models.ConsistencyLevelAny, batch); err == nil {
+			if err := s.PointsWriter.WritePointsPrivileged(s.database, s.retentionPolicy, s.consistencyLevel, batch); err == nil {
 				atomic.AddInt64(&s.stats.BatchesTransmitted, 1)
 				atomic.AddInt64(&s.stats.PointsTransmitted, int64(len(batch)))
 			} else {

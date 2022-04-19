@@ -51,6 +51,9 @@ type StatementExecutor struct {
 		WritePointsInto(*IntoWriteRequest) error
 	}
 
+	// Used for executing meta statements on all data nodes.
+	MetaExecutor *MetaExecutor
+
 	// Disallow INF values in SELECT INTO and other previously ignored errors
 	StrictErrorHandling bool
 
@@ -185,6 +188,8 @@ func (e *StatementExecutor) ExecuteStatement(ctx *query.ExecutionContext, stmt i
 		rows, err = e.executeShowRetentionPoliciesStatement(stmt)
 	case *influxql.ShowSeriesCardinalityStatement:
 		rows, err = e.executeShowSeriesCardinalityStatement(ctx, stmt)
+	case *influxql.ShowServersStatement:
+		rows, err = e.executeShowServersStatement(stmt)
 	case *influxql.ShowShardsStatement:
 		rows, err = e.executeShowShardsStatement(stmt)
 	case *influxql.ShowShardGroupsStatement:
@@ -328,7 +333,12 @@ func (e *StatementExecutor) executeDeleteSeriesStatement(stmt *influxql.DeleteSe
 	stmt.Condition = influxql.Reduce(stmt.Condition, &influxql.NowValuer{Now: time.Now().UTC()})
 
 	// Locally delete the series.
-	return e.TSDBStore.DeleteSeries(database, stmt.Sources, stmt.Condition)
+	if err := e.TSDBStore.DeleteSeries(database, stmt.Sources, stmt.Condition); err != nil {
+		return err
+	}
+
+	// Execute the statement on the other data nodes in the cluster.
+	return e.MetaExecutor.ExecuteStatement(stmt, database)
 }
 
 func (e *StatementExecutor) executeDropContinuousQueryStatement(q *influxql.DropContinuousQueryStatement) error {
@@ -348,6 +358,11 @@ func (e *StatementExecutor) executeDropDatabaseStatement(stmt *influxql.DropData
 		return err
 	}
 
+	// Execute the statement on the other data nodes in the cluster.
+	if err := e.MetaExecutor.ExecuteStatement(stmt, ""); err != nil {
+		return err
+	}
+
 	// Remove the database from the Meta Store.
 	return e.MetaClient.DropDatabase(stmt.Name)
 }
@@ -358,7 +373,12 @@ func (e *StatementExecutor) executeDropMeasurementStatement(stmt *influxql.DropM
 	}
 
 	// Locally drop the measurement
-	return e.TSDBStore.DeleteMeasurement(database, stmt.Name)
+	if err := e.TSDBStore.DeleteMeasurement(database, stmt.Name); err != nil {
+		return err
+	}
+
+	// Execute the statement on the other data nodes in the cluster.
+	return e.MetaExecutor.ExecuteStatement(stmt, database)
 }
 
 func (e *StatementExecutor) executeDropSeriesStatement(stmt *influxql.DropSeriesStatement, database string) error {
@@ -372,12 +392,22 @@ func (e *StatementExecutor) executeDropSeriesStatement(stmt *influxql.DropSeries
 	}
 
 	// Locally drop the series.
-	return e.TSDBStore.DeleteSeries(database, stmt.Sources, stmt.Condition)
+	if err := e.TSDBStore.DeleteSeries(database, stmt.Sources, stmt.Condition); err != nil {
+		return err
+	}
+
+	// Execute the statement on the other data nodes in the cluster.
+	return e.MetaExecutor.ExecuteStatement(stmt, database)
 }
 
 func (e *StatementExecutor) executeDropShardStatement(stmt *influxql.DropShardStatement) error {
 	// Locally delete the shard.
 	if err := e.TSDBStore.DeleteShard(stmt.ID); err != nil {
+		return err
+	}
+
+	// Execute the statement on the other data nodes in the cluster.
+	if err := e.MetaExecutor.ExecuteStatement(stmt, ""); err != nil {
 		return err
 	}
 
@@ -397,6 +427,11 @@ func (e *StatementExecutor) executeDropRetentionPolicyStatement(stmt *influxql.D
 
 	// Locally drop the retention policy.
 	if err := e.TSDBStore.DeleteRetentionPolicy(stmt.Database, stmt.Name); err != nil {
+		return err
+	}
+
+	// Execute the statement on the other data nodes in the cluster.
+	if err := e.MetaExecutor.ExecuteStatement(stmt, stmt.Database); err != nil {
 		return err
 	}
 
@@ -789,6 +824,24 @@ func (e *StatementExecutor) executeShowRetentionPoliciesStatement(q *influxql.Sh
 		row.Values = append(row.Values, []interface{}{rpi.Name, rpi.Duration.String(), rpi.ShardGroupDuration.String(), rpi.ReplicaN, di.DefaultRetentionPolicy == rpi.Name})
 	}
 	return []*models.Row{row}, nil
+}
+
+func (e *StatementExecutor) executeShowServersStatement(q *influxql.ShowServersStatement) (models.Rows, error) {
+	nis := e.MetaClient.DataNodes()
+	dataNodes := &models.Row{Columns: []string{"id", "http_addr", "tcp_addr"}}
+	dataNodes.Name = "data_nodes"
+	for _, ni := range nis {
+		dataNodes.Values = append(dataNodes.Values, []interface{}{ni.ID, ni.Addr, ni.TCPAddr})
+	}
+
+	nis = e.MetaClient.MetaNodes()
+	metaNodes := &models.Row{Columns: []string{"id", "http_addr", "tcp_addr"}}
+	metaNodes.Name = "meta_nodes"
+	for _, ni := range nis {
+		metaNodes.Values = append(metaNodes.Values, []interface{}{ni.ID, ni.Addr, ni.TCPAddr})
+	}
+
+	return []*models.Row{dataNodes, metaNodes}, nil
 }
 
 func (e *StatementExecutor) executeShowShardsStatement(stmt *influxql.ShowShardsStatement) (models.Rows, error) {
@@ -1364,6 +1417,7 @@ type IntoWriteRequest struct {
 type TSDBStore interface {
 	CreateShard(database, policy string, shardID uint64, enabled bool) error
 	WriteToShard(shardID uint64, points []models.Point) error
+	ShardGroup(ids []uint64) tsdb.ShardGroup
 
 	RestoreShard(id uint64, r io.Reader) error
 	BackupShard(id uint64, since time.Time, w io.Writer) error

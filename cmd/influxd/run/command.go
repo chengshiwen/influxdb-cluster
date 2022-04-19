@@ -83,6 +83,22 @@ func (cmd *Command) Run(args ...string) error {
 		return fmt.Errorf("apply env config: %v", err)
 	}
 
+	if options.Hostname != "" {
+		config.Hostname = options.Hostname
+	}
+
+	// Propagate the top-level hostname down to dependent configs
+	config.Meta.RemoteHostname = config.Hostname
+
+	// Propagate the top-level bind-address down to dependent configs
+	config.Coordinator.RemoteBindAddress = config.BindAddress
+
+	// Propagate the http bind-address down to dependent configs
+	config.Coordinator.RemoteHTTPBindAddress = config.HTTPD.BindAddress
+
+	// Propagate the monitor store-database down to dependent configs
+	config.AntiEntropy.RemoteStoreDatabase = config.Monitor.StoreDatabase
+
 	// Validate the configuration.
 	if err := config.Validate(); err != nil {
 		return fmt.Errorf("%s. To generate a valid configuration file run `influxd config > influxdb.generated.conf`", err)
@@ -193,9 +209,8 @@ func (cmd *Command) ParseFlags(args ...string) (Options, error) {
 	var options Options
 	fs := flag.NewFlagSet("", flag.ContinueOnError)
 	fs.StringVar(&options.ConfigPath, "config", "", "")
+	fs.StringVar(&options.Hostname, "hostname", "", "")
 	fs.StringVar(&options.PIDFile, "pidfile", "", "")
-	// Ignore hostname option.
-	_ = fs.String("hostname", "", "")
 	fs.StringVar(&options.CPUProfile, "cpuprofile", "", "")
 	fs.StringVar(&options.MemProfile, "memprofile", "", "")
 	fs.Usage = func() { fmt.Fprintln(cmd.Stderr, usage) }
@@ -256,6 +271,9 @@ Usage: influxd run [flags]
             is present at any of these locations.
             Disable the automatic loading of a configuration file using
             the null device (such as /dev/null).
+    -hostname <name>
+            Override the hostname, the 'hostname' configuration
+            option will be overridden.
     -pidfile <path>
             Write process ID to a file.
     -cpuprofile <path>
@@ -267,6 +285,7 @@ Usage: influxd run [flags]
 // Options represents the command line options that can be parsed.
 type Options struct {
 	ConfigPath string
+	Hostname   string
 	PIDFile    string
 	CPUProfile string
 	MemProfile string

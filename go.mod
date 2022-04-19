@@ -1,6 +1,6 @@
 module github.com/influxdata/influxdb
 
-go 1.13
+go 1.16
 
 require (
 	cloud.google.com/go/bigtable v1.2.0 // indirect
@@ -18,6 +18,8 @@ require (
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/snappy v0.0.0-20180518054509-2e65f85255db
 	github.com/google/go-cmp v0.4.0
+	github.com/hashicorp/raft v1.3.7
+	github.com/hashicorp/raft-boltdb/v2 v2.2.2
 	github.com/influxdata/flux v0.65.1
 	github.com/influxdata/influxql v1.1.1-0.20200828144457-65d3ef77d385
 	github.com/influxdata/pkg-config v0.2.8
@@ -54,4 +56,7 @@ require (
 	golang.org/x/tools v0.0.0-20210106214847-113979e3529a
 	gonum.org/v1/gonum v0.6.0 // indirect
 	google.golang.org/grpc v1.26.0
+	gopkg.in/fatih/pool.v2 v2.0.0
 )
+
+replace github.com/influxdata/influxql => github.com/chengshiwen/influxql v1.1.1-0.20220415184439-726dc89e0d7b

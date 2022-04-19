@@ -17,7 +17,7 @@ import argparse
 ################
 
 # Packaging variables
-PACKAGE_NAME = "influxdb"
+PACKAGE_NAME = "influxdb-cluster"
 USER = "influxdb"
 GROUP = "influxdb"
 INSTALL_ROOT_DIR = "/usr/bin"
@@ -36,19 +36,21 @@ POSTINST_SCRIPT = "scripts/post-install.sh"
 POSTUNINST_SCRIPT = "scripts/post-uninstall.sh"
 LOGROTATE_SCRIPT = "scripts/logrotate"
 DEFAULT_CONFIG = "etc/config.sample.toml"
+DEFAULT_META_CONFIG = "etc/meta.config.sample.toml"
 
 # Default AWS S3 bucket for uploads
 DEFAULT_BUCKET = "dl.influxdata.com/influxdb/artifacts"
 
 CONFIGURATION_FILES = [
     CONFIG_DIR + '/influxdb.conf',
+    CONFIG_DIR + '/influxdb-meta.conf',
     LOGROTATE_DIR + '/influxdb',
 ]
 
 PACKAGE_LICENSE = "MIT"
-PACKAGE_URL = "https://github.com/influxdata/influxdb"
-MAINTAINER = "support@influxdb.com"
-VENDOR = "InfluxData"
+PACKAGE_URL = "https://github.com/chengshiwen/influxdb-cluster"
+MAINTAINER = "chengshiwen@apache.org"
+VENDOR = "InfluxDB Cluster"
 DESCRIPTION = "Distributed time-series database."
 
 prereqs = [ 'git', 'go' ]
@@ -89,15 +91,16 @@ for f in CONFIGURATION_FILES:
 targets = {
     'influx' : './cmd/influx',
     'influxd' : './cmd/influxd',
+    'influxd-ctl' : './cmd/influxd-ctl',
+    'influxd-meta' : './cmd/influxd-meta',
     'influx_stress' : './cmd/influx_stress',
     'influx_inspect' : './cmd/influx_inspect',
-    'influx_tools': './cmd/influx_tools',
 }
 
 supported_builds = {
-    'darwin': [ "amd64" ],
+    'darwin': [ "amd64", "arm64" ],
     'windows': [ "amd64" ],
-    'linux': [ "amd64", "i386", "armhf", "arm64", "armel", "static_i386", "static_amd64" ]
+    'linux': [ "amd64", "i386", "armhf", "arm64", "static_amd64", "static_arm64" ]
 }
 
 supported_packages = {
@@ -128,10 +131,11 @@ def create_package_fs(build_root):
     dirs = [ INSTALL_ROOT_DIR[1:],
              LOG_DIR[1:],
              DATA_DIR[1:],
-             SCRIPT_DIR[1:],
+             # SCRIPT_DIR[1:],
              CONFIG_DIR[1:],
-             LOGROTATE_DIR[1:],
-             MAN_DIR[1:] ]
+             # LOGROTATE_DIR[1:],
+             # MAN_DIR[1:] ]
+           ]
     for d in dirs:
         os.makedirs(os.path.join(build_root, d))
         os.chmod(os.path.join(build_root, d), 0o755)
@@ -144,18 +148,22 @@ def package_scripts(build_root, config_only=False, windows=False):
         logging.debug("Copying configuration to build directory.")
         shutil.copyfile(DEFAULT_CONFIG, os.path.join(build_root, "influxdb.conf"))
         os.chmod(os.path.join(build_root, "influxdb.conf"), 0o644)
+        shutil.copyfile(DEFAULT_META_CONFIG, os.path.join(build_root, "influxdb-meta.conf"))
+        os.chmod(os.path.join(build_root, "influxdb-meta.conf"), 0o644)
     else:
         logging.debug("Copying scripts and sample configuration to build directory.")
-        shutil.copyfile(INIT_SCRIPT, os.path.join(build_root, SCRIPT_DIR[1:], INIT_SCRIPT.split('/')[1]))
-        os.chmod(os.path.join(build_root, SCRIPT_DIR[1:], INIT_SCRIPT.split('/')[1]), 0o644)
-        shutil.copyfile(SYSTEMD_SCRIPT, os.path.join(build_root, SCRIPT_DIR[1:], SYSTEMD_SCRIPT.split('/')[1]))
-        os.chmod(os.path.join(build_root, SCRIPT_DIR[1:], SYSTEMD_SCRIPT.split('/')[1]), 0o644)
-        shutil.copyfile(SYSTEMD_START_SCRIPT, os.path.join(build_root, SCRIPT_DIR[1:], SYSTEMD_START_SCRIPT.split('/')[1]))
-        os.chmod(os.path.join(build_root, SCRIPT_DIR[1:], SYSTEMD_START_SCRIPT.split('/')[1]), 0o755)
-        shutil.copyfile(LOGROTATE_SCRIPT, os.path.join(build_root, LOGROTATE_DIR[1:], "influxdb"))
-        os.chmod(os.path.join(build_root, LOGROTATE_DIR[1:], "influxdb"), 0o644)
+        # shutil.copyfile(INIT_SCRIPT, os.path.join(build_root, SCRIPT_DIR[1:], INIT_SCRIPT.split('/')[1]))
+        # os.chmod(os.path.join(build_root, SCRIPT_DIR[1:], INIT_SCRIPT.split('/')[1]), 0o644)
+        # shutil.copyfile(SYSTEMD_SCRIPT, os.path.join(build_root, SCRIPT_DIR[1:], SYSTEMD_SCRIPT.split('/')[1]))
+        # os.chmod(os.path.join(build_root, SCRIPT_DIR[1:], SYSTEMD_SCRIPT.split('/')[1]), 0o644)
+        # shutil.copyfile(SYSTEMD_START_SCRIPT, os.path.join(build_root, SCRIPT_DIR[1:], SYSTEMD_START_SCRIPT.split('/')[1]))
+        # os.chmod(os.path.join(build_root, SCRIPT_DIR[1:], SYSTEMD_START_SCRIPT.split('/')[1]), 0o755)
+        # shutil.copyfile(LOGROTATE_SCRIPT, os.path.join(build_root, LOGROTATE_DIR[1:], "influxdb"))
+        # os.chmod(os.path.join(build_root, LOGROTATE_DIR[1:], "influxdb"), 0o644)
         shutil.copyfile(DEFAULT_CONFIG, os.path.join(build_root, CONFIG_DIR[1:], "influxdb.conf"))
         os.chmod(os.path.join(build_root, CONFIG_DIR[1:], "influxdb.conf"), 0o644)
+        shutil.copyfile(DEFAULT_META_CONFIG, os.path.join(build_root, CONFIG_DIR[1:], "influxdb-meta.conf"))
+        os.chmod(os.path.join(build_root, CONFIG_DIR[1:], "influxdb-meta.conf"), 0o644)
 
 def package_man_files(build_root):
     """Copy and gzip man pages to the package filesystem."""
@@ -361,9 +369,14 @@ def get_system_arch():
         arch = "i386"
     elif arch == "aarch64":
         arch = "arm64"
-    elif 'arm' in arch:
-        # Prevent uname from reporting full ARM arch (eg 'armv7l')
-        arch = "arm"
+    elif "arm" in arch and arch != "arm64":
+        if "v7" in arch:
+            arch = "armhf"
+        elif "v8" in arch:
+            arch = "arm64"
+        else:
+            # Prevent uname from reporting full ARM arch (eg 'armv7l')
+            arch = "arm"
     return arch
 
 def get_system_platform():
@@ -532,21 +545,14 @@ def build(version=None,
         # Handle variations in architecture output
         if arch == "i386" or arch == "i686":
             arch = "386"
-        elif "arm" in arch:
-            arch = "arm"
-        build_command += "GOOS={} GOARCH={} ".format(platform, arch)
+        build_command += "GOOS={} GOARCH={} ".format(platform, "arm" if "arm" in arch and arch != "arm64" else arch)
 
-        if "arm" in arch:
-            if arch == "armel":
-                build_command += "GOARM=5 "
-            elif arch == "armhf" or arch == "arm":
-                build_command += "GOARM=6 "
-            elif arch == "arm64":
-                # TODO(rossmcdonald) - Verify this is the correct setting for arm64
+        if "arm" in arch and arch != "arm64":
+            if arch == "armhf":
                 build_command += "GOARM=7 "
             else:
                 logging.error("Invalid ARM architecture specified: {}".format(arch))
-                logging.error("Please specify either 'armel', 'armhf', or 'arm64'.")
+                logging.error("Please specify either 'armhf' or 'arm64'.")
                 return False
         if platform == 'windows':
             target = target + '.exe'
@@ -557,7 +563,7 @@ def build(version=None,
             build_command += "-tags {} ".format(','.join(tags))
         if "1.4" in get_go_version():
             if static:
-                build_command += "-ldflags=\"-s -X main.version {} -X main.branch {} -X main.commit {}\" ".format(version,
+                build_command += "-ldflags=\"-s -w -X main.version {} -X main.branch {} -X main.commit {}\" ".format(version,
                                                                                                                   get_current_branch(),
                                                                                                                   get_current_commit())
             else:
@@ -568,7 +574,7 @@ def build(version=None,
         else:
             # Starting with Go 1.5, the linker flag arguments changed to 'name=value' from 'name value'
             if static:
-                build_command += "-ldflags=\"-s -X main.version={} -X main.branch={} -X main.commit={}\" ".format(version,
+                build_command += "-ldflags=\"-s -w -X main.version={} -X main.branch={} -X main.commit={}\" ".format(version,
                                                                                                                   get_current_branch(),
                                                                                                                   get_current_commit())
             else:
@@ -576,7 +582,7 @@ def build(version=None,
                                                                                                                get_current_branch(),
                                                                                                                get_current_commit())
         if static:
-            build_command += "-a -installsuffix cgo "
+            build_command += "-a "
         build_command += path
         start_time = datetime.utcnow()
         run(build_command, shell=True)
@@ -642,8 +648,8 @@ def package(build_output, pkg_name, version, nightly=False, iteration=1, static=
                     create_package_fs(build_root)
                     package_scripts(build_root)
 
-                if platform != "windows":
-                    package_man_files(build_root)
+                # if platform != "windows":
+                #     package_man_files(build_root)
 
                 for binary in targets:
                     # Copy newly-built binaries to packaging directory
@@ -688,21 +694,21 @@ def package(build_output, pkg_name, version, nightly=False, iteration=1, static=
                         package_build_root = os.path.join('/', '/'.join(build_root.split('/')[:-1]))
                         if nightly:
                             if static or "static_" in arch:
-                                name = '{}-static-nightly_{}_{}'.format(name,
+                                name = '{}_static_nightly_{}_{}'.format(name,
                                                                         platform,
                                                                         package_arch)
                             else:
-                                name = '{}-nightly_{}_{}'.format(name,
+                                name = '{}_nightly_{}_{}'.format(name,
                                                                  platform,
                                                                  package_arch)
                         else:
                             if static or "static_" in arch:
-                                name = '{}-{}-static_{}_{}'.format(name,
+                                name = '{}_{}_static_{}_{}'.format(name,
                                                                    package_version,
                                                                    platform,
                                                                    package_arch)
                             else:
-                                name = '{}-{}_{}_{}'.format(name,
+                                name = '{}_{}_{}_{}'.format(name,
                                                             package_version,
                                                             platform,
                                                             package_arch)
@@ -722,6 +728,9 @@ def package(build_output, pkg_name, version, nightly=False, iteration=1, static=
                     elif package_type not in ['zip', 'tar'] and static or "static_" in arch:
                         logging.info("Skipping package type '{}' for static builds.".format(package_type))
                     else:
+                        # Skip deb and rpm
+                        logging.info("Skipping package type '{}' for builds.".format(package_type))
+                        continue
                         if package_type == "rpm":
                             if package_arch == "armhf":
                                 package_arch = "armv7hl"
@@ -908,7 +917,7 @@ if __name__ == '__main__':
                         type=str,
                         help='Name to use for package name (when package is specified)')
     parser.add_argument('--arch',
-                        metavar='<amd64|i386|armhf|arm64|armel|all>',
+                        metavar='<amd64|i386|armhf|arm64|all>',
                         type=str,
                         default=get_system_arch(),
                         help='Target architecture for build output')

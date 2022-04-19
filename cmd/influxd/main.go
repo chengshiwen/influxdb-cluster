@@ -8,13 +8,12 @@ import (
 	"math/rand"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
 	"github.com/influxdata/influxdb/cmd"
-	"github.com/influxdata/influxdb/cmd/influxd/backup"
 	"github.com/influxdata/influxdb/cmd/influxd/help"
-	"github.com/influxdata/influxdb/cmd/influxd/restore"
 	"github.com/influxdata/influxdb/cmd/influxd/run"
 )
 
@@ -105,16 +104,6 @@ func (m *Main) Run(args ...string) error {
 
 		// goodbye.
 
-	case "backup":
-		name := backup.NewCommand()
-		if err := name.Run(args...); err != nil {
-			return fmt.Errorf("backup: %s", err)
-		}
-	case "restore":
-		name := restore.NewCommand()
-		if err := name.Run(args...); err != nil {
-			return fmt.Errorf("restore: %s", err)
-		}
 	case "config":
 		if err := run.NewPrintConfigCommand().Run(args...); err != nil {
 			return fmt.Errorf("config: %s", err)
@@ -158,7 +147,8 @@ func (cmd *VersionCommand) Run(args ...string) error {
 	}
 
 	// Print version info.
-	fmt.Fprintf(cmd.Stdout, "InfluxDB v%s (git: %s %s)\n", version, branch, commit)
+	fmt.Fprintf(cmd.Stdout, "InfluxDB v%s (git: %s %s, build: %s %s/%s)\n", version, branch, commit,
+		runtime.Version(), runtime.GOOS, runtime.GOARCH)
 
 	return nil
 }
