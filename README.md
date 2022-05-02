@@ -7,6 +7,8 @@
 ![GitHub stars](https://img.shields.io/github/stars/chengshiwen/influxdb-cluster.svg?label=github%20stars&logo=github)
 [![Docker pulls](https://img.shields.io/docker/pulls/chengshiwen/influxdb.svg)](https://hub.docker.com/r/chengshiwen/influxdb)
 
+InfluxDB Cluster - An Open-Source Distributed Time Series Database, Open Source Alternative to InfluxDB Enterprise
+
 ## An Open-Source, Distributed, Time Series Database
 
 InfluxDB Cluster is an open source **time series database** with
@@ -36,7 +38,7 @@ Please see: [Clustering in InfluxDB Enterprise](https://docs.influxdata.com/ente
 
 Architectural overview:
 
-![architecture](https://github.com/chengshiwen/influxdb-cluster/wiki/image/architecture.png)
+![architecture.png](https://iili.io/Vw1XTB.png)
 
 Network overview:
 
@@ -48,16 +50,14 @@ We recommend installing InfluxDB Cluster using one of the [pre-built releases](h
 
 Complete the following steps to install an InfluxDB Cluster in your own environment:
 
-1. [Install InfluxDB Cluster meta nodes](https://docs.influxdata.com/enterprise_influxdb/v1.8/install-and-deploy/production_installation/meta_node_installation/)
-2. [Install InfluxDB Cluster data nodes](https://docs.influxdata.com/enterprise_influxdb/v1.8/install-and-deploy/production_installation/data_node_installation/)
-
-For more information about deployment, please review the above two steps or see [Deployment](https://github.com/chengshiwen/influxdb-cluster/wiki/Home-Eng#deployment).
+1. [Install InfluxDB Cluster meta nodes](https://github.com/chengshiwen/influxdb-cluster/wiki/Home-Eng#meta-node-setup)
+2. [Install InfluxDB Cluster data nodes](https://github.com/chengshiwen/influxdb-cluster/wiki/Home-Eng#data-node-setup)
 
 > **Note**: The installation of InfluxDB Cluster is exactly the same as that of InfluxDB Enterprise.
 
 ## Docker Quickstart
 
-Download [docker-compose.yml](./docker/quick/docker-compose.yml) in [docker/quick](./docker/quick)
+Download [docker-compose.yml](./docker/quick/docker-compose.yml), then start 3 meta nodes and 2 data nodes by `docker-compose`:
 
 ```
 docker-compose up -d
@@ -68,6 +68,12 @@ influxd-ctl add-meta influxdb-meta-03:8091
 influxd-ctl add-data influxdb-data-01:8088
 influxd-ctl add-data influxdb-data-02:8088
 influxd-ctl show
+```
+
+Stop and remove them when they are no longer in use:
+
+```
+docker-compose down -v
 ```
 
 ## Getting Started
@@ -83,12 +89,14 @@ curl -XPOST "http://influxdb-data-01:8086/query" --data-urlencode "q=CREATE DATA
 curl -XPOST "http://influxdb-data-01:8086/write?db=mydb" \
 -d 'cpu,host=server01,region=uswest load=42 1434055562000000000'
 
-curl -XPOST "http://influxdb-data-02:8086/write?db=mydb" \
+curl -XPOST "http://influxdb-data-02:8086/write?db=mydb&consistency=all" \
 -d 'cpu,host=server02,region=uswest load=78 1434055562000000000'
 
-curl -XPOST "http://influxdb-data-02:8086/write?db=mydb" \
+curl -XPOST "http://influxdb-data-02:8086/write?db=mydb&consistency=quorum" \
 -d 'cpu,host=server03,region=useast load=15.4 1434055562000000000'
 ```
+
+> **Note**: `consistency=[any,one,quorum,all]` sets the write consistency for the point. `consistency` is `one` if you do not specify consistency. See the [Insert some data / Write consistency](https://github.com/chengshiwen/influxdb-cluster/wiki/Home-Eng#insert-some-data) for detailed descriptions of each consistency option.
 
 ### Query for the data
 ```
@@ -104,6 +112,7 @@ curl -G "http://influxdb-data-02:8086/query?pretty=true" --data-urlencode "db=my
 
 ## Documentation
 
+* View the wiki: [English Document](https://github.com/chengshiwen/influxdb-cluster/wiki/Home-Eng) / [中文文档](https://github.com/chengshiwen/influxdb-cluster/wiki/Home).
 * Read more about the [design goals and motivations of the project](https://docs.influxdata.com/enterprise_influxdb/v1.8/).
 * Follow the [getting started guide](https://docs.influxdata.com/enterprise_influxdb/v1.8/introduction/getting-started/) to learn the basics in just a few minutes.
 * Learn more about [clustering](https://docs.influxdata.com/enterprise_influxdb/v1.8/concepts/clustering/) and [glossary](https://docs.influxdata.com/enterprise_influxdb/v1.8/concepts/glossary/).
@@ -120,4 +129,4 @@ See [LICENSE](./LICENSE) and [DEPENDENCIES.md](./DEPENDENCIES.md).
 
 - Email: chengshiwen@apache.org
 - [GitHub Issues](https://github.com/chengshiwen/influxdb-cluster/issues)
-- [Community & Communication](https://github.com/chengshiwen/influxdb-cluster/wiki/Home-Eng#community--communication)
+- [Community & Communication](https://github.com/chengshiwen/influxdb-cluster/wiki/Home-Eng#community--communication) / [社区 & 交流](https://github.com/chengshiwen/influxdb-cluster/wiki#社区--交流)
