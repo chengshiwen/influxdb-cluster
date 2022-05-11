@@ -474,6 +474,9 @@ func (s *Server) Open() error {
 	s.TSDBStore.WithLogger(s.Logger)
 	if s.config.Data.QueryLogEnabled {
 		s.QueryExecutor.WithLogger(s.Logger)
+	} else if s.config.Coordinator.LogQueriesAfter > 0 {
+		// Log long-running queries even if not logging all queries
+		s.QueryExecutor.TaskManager.Logger = s.Logger
 	}
 	s.PointsWriter.WithLogger(s.Logger)
 	s.HintedHandoff.WithLogger(s.Logger)
