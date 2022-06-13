@@ -591,7 +591,7 @@ func (w *PointsWriter) writeToShardWithContext(ctx context.Context, shard *meta.
 			// If the write returned an error, continue to the next response
 			if result.Err != nil {
 				atomic.AddInt64(&w.stats.WriteErr, 1)
-				w.Logger.Info("Write failed", zap.Uint64("node_id", result.Owner.NodeID), zap.Uint64("shard_id", shard.ID), zap.Error(result.Err))
+				w.Logger.Warn("Write failed", zap.Uint64("node_id", result.Owner.NodeID), zap.Uint64("shard_id", shard.ID), zap.Error(result.Err))
 
 				if result.Err.Error() == hh.ErrHintedHandoffQueueNotEmpty.Error() || result.Err.Error() == hh.ErrQueueBlocked.Error() {
 					continue
