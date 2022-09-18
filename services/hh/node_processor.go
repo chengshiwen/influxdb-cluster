@@ -1,7 +1,6 @@
 package hh
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"github.com/influxdata/influxdb/models"
+	"github.com/influxdata/influxdb/services/meta"
 	"go.uber.org/zap"
 )
 
@@ -19,10 +19,11 @@ type NodeProcessor struct {
 	PurgeInterval    time.Duration // Interval between periodic purge checks
 	RetryInterval    time.Duration // Interval between periodic write-to-node attempts.
 	RetryMaxInterval time.Duration // Max interval between periodic write-to-node attempts.
+	RetryRateLimit   int64         // Limits the rate data is sent to node.
 	MaxSize          int64         // Maximum size an underlying queue can get.
 	MaxAge           time.Duration // Maximum age queue data can get before purging.
-	RetryRateLimit   int64         // Limits the rate data is sent to node.
 	nodeID           uint64
+	shardID          uint64
 	dir              string
 
 	mu   sync.RWMutex
@@ -38,23 +39,30 @@ type NodeProcessor struct {
 	Logger      *zap.Logger
 }
 
-// NewNodeProcessor returns a new NodeProcessor for the given node, using dir for
+// NewNodeProcessor returns a new NodeProcessor for the given node and shard, using dir for
 // the hinted-handoff data.
-func NewNodeProcessor(cfg Config, nodeID uint64, dir string, w shardWriter, m metaClient, logger *zap.Logger) *NodeProcessor {
+func NewNodeProcessor(cfg Config, nodeID, shardID uint64, dir string, w shardWriter, m metaClient) *NodeProcessor {
 	return &NodeProcessor{
 		PurgeInterval:    time.Duration(cfg.PurgeInterval),
 		RetryInterval:    time.Duration(cfg.RetryInterval),
 		RetryMaxInterval: time.Duration(cfg.RetryMaxInterval),
+		RetryRateLimit:   cfg.RetryRateLimit,
 		MaxSize:          cfg.MaxSize,
 		MaxAge:           time.Duration(cfg.MaxAge),
 		nodeID:           nodeID,
+		shardID:          shardID,
 		dir:              dir,
 		writer:           w,
 		meta:             m,
 		stats:            &Statistics{},
-		defaultTags:      models.StatisticTags{"node": fmt.Sprintf("%d", nodeID)},
-		Logger:           logger,
+		defaultTags:      models.StatisticTags{"node": fmt.Sprintf("%d", nodeID), "shardID": fmt.Sprintf("%d", shardID)},
+		Logger:           zap.NewNop(),
 	}
+}
+
+// WithLogger sets the logger on the node processor.
+func (n *NodeProcessor) WithLogger(log *zap.Logger) {
+	n.Logger = log
 }
 
 // Open opens the NodeProcessor. It will read and write data present in dir, and
@@ -117,8 +125,8 @@ func (n *NodeProcessor) Statistics(tags map[string]string) []models.Statistic {
 		Values: map[string]interface{}{
 			statBytesRead:           atomic.LoadInt64(&n.stats.BytesRead),
 			statBytesWritten:        atomic.LoadInt64(&n.stats.BytesWritten),
-			statQueueBytes:          atomic.LoadInt64(&n.stats.QueueBytes),
-			statQueueDepth:          atomic.LoadInt64(&n.stats.QueueDepth),
+			statQueueBytes:          n.queue.diskUsage(),
+			statQueueDepth:          len(n.queue.segments),
 			statWriteBlocked:        atomic.LoadInt64(&n.stats.WriteBlocked),
 			statWriteDropped:        atomic.LoadInt64(&n.stats.WriteDropped),
 			statWriteShardReq:       atomic.LoadInt64(&n.stats.WriteShardReq),
@@ -145,7 +153,7 @@ func (n *NodeProcessor) Purge() error {
 
 // WriteShard writes hinted-handoff data for the given shard and node. Since it may manipulate
 // hinted-handoff queues, and be called concurrently, it takes a lock during queue access.
-func (n *NodeProcessor) WriteShard(shardID uint64, points []models.Point) error {
+func (n *NodeProcessor) WriteShard(points []models.Point) error {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 
@@ -156,8 +164,26 @@ func (n *NodeProcessor) WriteShard(shardID uint64, points []models.Point) error 
 	atomic.AddInt64(&n.stats.WriteShardReq, 1)
 	atomic.AddInt64(&n.stats.WriteShardReqPoints, int64(len(points)))
 
-	b := marshalWrite(shardID, points)
-	return n.queue.Append(b)
+	i, j := 0, len(points)
+	for i < j {
+		b := marshalWrite(points[i:j])
+		for len(b) > defaultSegmentSize {
+			if j == i+1 {
+				return ErrSegmentFull
+			}
+			j = (i + j + 1) / 2
+			b = marshalWrite(points[i:j])
+		}
+		atomic.AddInt64(&n.stats.BytesWritten, int64(len(b)))
+		if err := n.queue.Append(b); err != nil {
+			return err
+		}
+		if j == len(points) {
+			break
+		}
+		i, j = j, len(points)
+	}
+	return nil
 }
 
 // LastModified returns the time the NodeProcessor last receieved hinted-handoff data.
@@ -186,7 +212,7 @@ func (n *NodeProcessor) run() {
 
 		case <-time.After(n.PurgeInterval):
 			if err := n.queue.PurgeOlderThan(time.Now().Add(-n.MaxAge)); err != nil {
-				n.Logger.Error("Failed to purge", zap.Uint64("node", n.nodeID), zap.Error(err))
+				n.Logger.Error("Failed to purge", zap.Uint64("node", n.nodeID), zap.Uint64("shardID", n.shardID), zap.Error(err))
 			}
 
 		case <-time.After(currInterval):
@@ -241,17 +267,18 @@ func (n *NodeProcessor) SendWrite() (int, error) {
 	}
 
 	// unmarshal the byte slice back to shard ID and points
-	shardID, points, err := unmarshalWrite(buf)
+	points, err := unmarshalWrite(buf)
 	if err != nil {
+		atomic.AddInt64(&n.stats.WriteDropped, int64(len(buf)))
 		n.Logger.Error("Unmarshal write failed", zap.Error(err))
 		// Try to skip it.
 		if err := n.queue.Advance(); err != nil {
-			n.Logger.Error("Failed to advance queue", zap.Uint64("node", n.nodeID), zap.Error(err))
+			n.Logger.Error("Failed to advance queue", zap.Uint64("node", n.nodeID), zap.Uint64("shardID", n.shardID), zap.Error(err))
 		}
 		return 0, err
 	}
 
-	if err := n.writer.WriteShard(shardID, n.nodeID, points); err != nil {
+	if err := n.writer.WriteShard(n.shardID, n.nodeID, points); err != nil {
 		atomic.AddInt64(&n.stats.WriteNodeReqFail, 1)
 		return 0, err
 	}
@@ -259,7 +286,7 @@ func (n *NodeProcessor) SendWrite() (int, error) {
 	atomic.AddInt64(&n.stats.WriteNodeReqPoints, int64(len(points)))
 
 	if err := n.queue.Advance(); err != nil {
-		n.Logger.Error("Failed to advance queue", zap.Uint64("node", n.nodeID), zap.Error(err))
+		n.Logger.Error("Failed to advance queue", zap.Uint64("node", n.nodeID), zap.Uint64("shardID", n.shardID), zap.Error(err))
 	}
 
 	return len(buf), nil
@@ -286,16 +313,22 @@ func (n *NodeProcessor) Tail() string {
 // Active returns whether this node processor is for a currently active node.
 func (n *NodeProcessor) Active() (bool, error) {
 	nio, err := n.meta.DataNode(n.nodeID)
-	if err != nil {
-		n.Logger.Error("Failed to determine if node is active", zap.Uint64("node", n.nodeID), zap.Error(err))
+	if err != nil && err != meta.ErrNodeNotFound {
 		return false, err
 	}
 	return nio != nil, nil
 }
 
-func marshalWrite(shardID uint64, points []models.Point) []byte {
-	b := make([]byte, 8)
-	binary.BigEndian.PutUint64(b, shardID)
+// Empty returns whether this node processor's queue is empty.
+func (n *NodeProcessor) Empty() bool {
+	return n.queue.Empty()
+}
+
+func marshalWrite(points []models.Point) []byte {
+	var b []byte
+	if len(points) > 0 {
+		b = make([]byte, 0, (len(points[0].String())+1)*len(points))
+	}
 	for _, p := range points {
 		b = append(b, []byte(p.String())...)
 		b = append(b, '\n')
@@ -303,11 +336,9 @@ func marshalWrite(shardID uint64, points []models.Point) []byte {
 	return b
 }
 
-func unmarshalWrite(b []byte) (uint64, []models.Point, error) {
-	if len(b) < 8 {
-		return 0, nil, fmt.Errorf("too short: len = %d", len(b))
+func unmarshalWrite(b []byte) ([]models.Point, error) {
+	if len(b) == 0 {
+		return nil, fmt.Errorf("too short: zero")
 	}
-	ownerID := binary.BigEndian.Uint64(b[:8])
-	points, err := models.ParsePoints(b[8:])
-	return ownerID, points, err
+	return models.ParsePoints(b)
 }

@@ -1,13 +1,12 @@
 package show
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/influxdata/influxdb/cmd/influxd-ctl/common"
 	"github.com/influxdata/influxdb/services/meta"
@@ -32,10 +31,8 @@ func NewCommand(cOpts *common.Options) *Command {
 // Run executes the program.
 func (cmd *Command) Run(args ...string) error {
 	args, err := cmd.parseFlags(args)
-	if err == flag.ErrHelp {
+	if err != nil {
 		return nil
-	} else if err != nil {
-		return err
 	}
 	if len(args) > 0 {
 		return fmt.Errorf("unexpected extra arguments: %v", args)
@@ -44,39 +41,32 @@ func (cmd *Command) Run(args ...string) error {
 	return common.OperationExitedError(err)
 }
 
-// show cluster info.
+// show cluster nodes.
 func (cmd *Command) show() error {
 	client := common.NewHTTPClient(cmd.cOpts)
-	resp, err := client.Get("/show-cluster")
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return meta.DecodeErrorResponse(resp.Body)
-	}
-
+	defer client.Close()
 	ci := &meta.ClusterInfo{}
-	if err = json.NewDecoder(resp.Body).Decode(ci); err != nil {
+	if err := client.ShowCluster(ci); err != nil {
 		return err
 	}
+	tw := tabwriter.NewWriter(os.Stdout, 8, 8, 2, '\t', 0)
 
 	fmt.Fprintln(cmd.Stdout, "Data Nodes")
 	fmt.Fprintln(cmd.Stdout, "==========")
-	fmt.Fprintln(cmd.Stdout, "ID\tTCP Address")
+	fmt.Fprintln(tw, strings.Join([]string{"ID", "TCP Address", "Version"}, "\t"))
 	for _, n := range ci.Data {
-		fmt.Fprintln(cmd.Stdout, n.ID, "\t", n.TCPAddr)
+		fmt.Fprintf(tw, "%d\t%s\t%s\n", n.ID, n.TCPAddr, n.Version)
 	}
+	tw.Flush()
 	fmt.Fprintln(cmd.Stdout, "")
 
 	fmt.Fprintln(cmd.Stdout, "Meta Nodes")
 	fmt.Fprintln(cmd.Stdout, "==========")
-	fmt.Fprintln(cmd.Stdout, "ID\tTCP Address")
+	fmt.Fprintln(tw, strings.Join([]string{"ID", "TCP Address", "Version"}, "\t"))
 	for _, n := range ci.Meta {
-		fmt.Fprintln(cmd.Stdout, n.ID, "\t", n.Addr)
+		fmt.Fprintf(tw, "%d\t%s\t%s\n", n.ID, n.Addr, n.Version)
 	}
-	fmt.Fprintln(cmd.Stdout, "")
-
+	tw.Flush()
 	return nil
 }
 

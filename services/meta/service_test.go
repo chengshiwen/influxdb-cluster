@@ -1,7 +1,6 @@
 package meta_test
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -14,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/raft"
 	"github.com/influxdata/influxdb/cmd/influxd-ctl/common"
 	"github.com/influxdata/influxdb/services/meta"
 	"github.com/influxdata/influxdb/tcp"
@@ -666,34 +666,37 @@ type testService struct {
 }
 
 func (t *testService) open() {
-	go func() {
+	if t.ss {
 		t.Open()
-	}()
-	t.waitOpened()
+	} else {
+		go func() {
+			t.Open()
+		}()
+		t.waitForFollower(0)
+	}
 }
 
-func (t *testService) waitOpened() {
-	connected := false
-	for !connected {
-		time.Sleep(500 * time.Millisecond)
-		resp, err := http.Get("http://" + t.HTTPAddr() + "/show-cluster")
-		if err != nil {
-			continue
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			continue
-		}
-		if t.ss {
-			ci := &meta.ClusterInfo{}
-			if err = json.NewDecoder(resp.Body).Decode(ci); err != nil {
-				continue
+// waitForFollower sleeps until a follower is found or a timeout occurs.
+// timeout == 0 means to wait forever.
+func (t *testService) waitForFollower(timeout time.Duration) error {
+	// Begin timeout timer.
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	// Continually check for follower until timeout.
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-timer.C:
+			if timeout != 0 {
+				return errors.New("timeout")
 			}
-			if len(ci.Meta) != 1 {
-				continue
+		case <-ticker.C:
+			if t.State() == raft.Follower {
+				return nil
 			}
 		}
-		connected = true
 	}
 }
 
@@ -734,6 +737,7 @@ func joinPeers(peers []string) error {
 	}
 	for _, peer := range peers {
 		client := common.NewHTTPClient(cOpts)
+		defer client.Close()
 		data := url.Values{"addr": {peer}}
 		resp, err := client.PostForm("/join", data)
 		if err != nil {
@@ -754,15 +758,16 @@ func joinPeers(peers []string) error {
 		}
 		defer c.Close()
 
-		tries, maxTries := 0, 100
-		metaNodes := c.MetaNodes()
-		for len(metaNodes) != len(peers) && tries < maxTries {
-			tries += 1
+		timeout := time.Now().Add(10 * time.Second)
+		for {
+			metaNodes := c.MetaNodes()
+			if len(metaNodes) == len(peers) {
+				break
+			}
+			if time.Now().After(timeout) {
+				panic(fmt.Errorf("node %s - meta nodes wrong: %v, timed out", peer, metaNodes))
+			}
 			time.Sleep(100 * time.Millisecond)
-			metaNodes = c.MetaNodes()
-		}
-		if tries == maxTries {
-			panic(fmt.Errorf("node %s - meta nodes wrong: %v, %d retries", peer, metaNodes, maxTries))
 		}
 	}
 	return nil

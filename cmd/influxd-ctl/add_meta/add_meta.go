@@ -1,13 +1,10 @@
 package add_meta
 
 import (
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"strings"
 
@@ -34,10 +31,8 @@ func NewCommand(cOpts *common.Options) *Command {
 // Run executes the program.
 func (cmd *Command) Run(args ...string) error {
 	args, err := cmd.parseFlags(args)
-	if err == flag.ErrHelp {
+	if err != nil {
 		return nil
-	} else if err != nil {
-		return err
 	}
 	if len(args) == 0 {
 		return errors.New("httpAddr value is empty")
@@ -48,24 +43,14 @@ func (cmd *Command) Run(args ...string) error {
 	return common.OperationExitedError(err)
 }
 
-// add meta addr.
+// add meta node.
 func (cmd *Command) addMeta(addr string) error {
 	client := common.NewHTTPClient(cmd.cOpts)
-	data := url.Values{"addr": {addr}}
-	resp, err := client.PostForm("/join", data)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return meta.DecodeErrorResponse(resp.Body)
-	}
-
+	defer client.Close()
 	mn := &meta.MetaNodeInfo{}
-	if err = json.NewDecoder(resp.Body).Decode(mn); err != nil {
+	if err := client.Join(addr, mn); err != nil {
 		return err
 	}
-
 	fmt.Fprintf(cmd.Stdout, "Added meta node %d at %s\n", mn.ID, mn.Addr)
 	return nil
 }

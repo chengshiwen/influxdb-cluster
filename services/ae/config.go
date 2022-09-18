@@ -31,9 +31,6 @@ type Config struct {
 	MaxFetch          int           `toml:"max-fetch"`
 	MaxSync           int           `toml:"max-sync"`
 	AutoRepairMissing bool          `toml:"auto-repair-missing"`
-
-	// RemoteStoreDatabase is the store database portion to use when anti-entropy running.
-	RemoteStoreDatabase string `toml:"-"`
 }
 
 // NewConfig returns an instance of Config with defaults.

@@ -3,10 +3,12 @@ package meta
 import (
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
 	"time"
 
 	"github.com/influxdata/influxdb/monitor/diagnostics"
+	"github.com/influxdata/influxdb/tcp"
 	"github.com/influxdata/influxdb/toml"
 )
 
@@ -20,28 +22,37 @@ const (
 	// DefaultHTTPBindAddress is the default address to bind the API to.
 	DefaultHTTPBindAddress = ":8091"
 
-	// DefaultGossipFrequency is the default frequency with which the node will gossip its known announcements.
+	// DefaultGossipFrequency is the default frequency with which the node
+	// will gossip its known announcements.
 	DefaultGossipFrequency = 5 * time.Second
 
-	// DefaultAnnouncementExpiration is the default length of time an announcement is kept before it is considered too old.
+	// DefaultAnnouncementExpiration is the default length of time
+	// an announcement is kept before it is considered too old.
 	DefaultAnnouncementExpiration = 30 * time.Second
 
-	// DefaultElectionTimeout is the default election timeout for the store.
+	// DefaultElectionTimeout is the amount of time in candidate state
+	// without a leader before we attempt an election.
 	DefaultElectionTimeout = 1000 * time.Millisecond
 
-	// DefaultHeartbeatTimeout is the default heartbeat timeout for the store.
+	// DefaultHeartbeatTimeout is the amount of time in follower state
+	// without a leader before we attempt an election.
 	DefaultHeartbeatTimeout = 1000 * time.Millisecond
 
-	// DefaultLeaderLeaseTimeout is the default leader lease for the store.
+	// DefaultLeaderLeaseTimeout is the amount of time a Raft leader will remain leader
+	// if it does not hear from a majority of nodes.
 	DefaultLeaderLeaseTimeout = 500 * time.Millisecond
 
-	// DefaultConsensusTimeout is the default consensus timeout for the store.
+	// DefaultConsensusTimeout is the timeout waiting for consensus
+	// before getting the latest Raft snapshot.
 	DefaultConsensusTimeout = 30 * time.Second
 
-	// DefaultCommitTimeout is the default commit timeout for the store.
+	// DefaultCommitTimeout is the amount of time a Raft node
+	// will tolerate between commands
+	// before issuing a heartbeat to tell the leader it is alive.
 	DefaultCommitTimeout = 50 * time.Millisecond
 
-	// DefaultLeaseDuration is the default duration for leases.
+	// DefaultLeaseDuration is the default duration of the leases
+	// that data nodes acquire from the meta nodes.
 	DefaultLeaseDuration = 60 * time.Second
 
 	// DefaultLoggingEnabled determines if log messages are printed for the meta service.
@@ -119,7 +130,6 @@ func NewConfig() *Config {
 		PprofEnabled:           true,
 		LeaseDuration:          toml.Duration(DefaultLeaseDuration),
 	}
-
 }
 
 // Validate returns an error if the config is invalid.
@@ -127,7 +137,20 @@ func (c *Config) Validate() error {
 	if c.Dir == "" {
 		return errors.New("Meta.Dir must be specified")
 	}
+	if time.Duration(c.GossipFrequency).Milliseconds() < 250 {
+		return fmt.Errorf("gossiping frequency %s is too low (minimum 250ms)", c.GossipFrequency)
+	}
 	return nil
+}
+
+// TLSConfig returns a TLS config.
+func (c Config) TLSConfig() (*tls.Config, error) {
+	return tcp.TLSConfig(c.TLS, c.HTTPSEnabled, c.HTTPSCertificate, c.HTTPSPrivateKey)
+}
+
+// TLSClientConfig returns a client TLS config.
+func (c Config) TLSClientConfig() *tls.Config {
+	return tcp.TLSClientConfig(c.HTTPSEnabled, c.HTTPSInsecureTLS)
 }
 
 // Diagnostics returns a diagnostics representation of a subset of the Config.

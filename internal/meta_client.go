@@ -38,6 +38,8 @@ type MetaClientMock struct {
 	MetaNodesFn func() []meta.NodeInfo
 	NodeIDFn    func() uint64
 
+	MetaServersFn func() []string
+
 	OpenFn func() error
 
 	PrecreateShardGroupsFn func(from, to time.Time) error
@@ -151,6 +153,10 @@ func (c *MetaClientMock) MetaNodes() []meta.NodeInfo {
 
 func (c *MetaClientMock) NodeID() uint64 {
 	return c.NodeIDFn()
+}
+
+func (c *MetaClientMock) MetaServers() []string {
+	return c.MetaServersFn()
 }
 
 func (c *MetaClientMock) RetentionPolicy(database, name string) (rpi *meta.RetentionPolicyInfo, err error) {

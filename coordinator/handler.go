@@ -25,13 +25,13 @@ type handler struct {
 
 // newHandler returns a new instance of handler with routes.
 func newHandler(s *Service) *handler {
-	host, port, _ := net.SplitHostPort(s.TCPAddr())
+	host, port, _ := net.SplitHostPort(s.Server.TCPAddr())
 	h := &handler{
 		s:        s,
 		hostname: host,
 		tcpBind:  ":" + port,
-		tcpAddr:  s.TCPAddr(),
-		httpAddr: s.HTTPAddr(),
+		tcpAddr:  s.Server.TCPAddr(),
+		httpAddr: s.Server.HTTPAddr(),
 		logger:   s.Logger,
 	}
 
@@ -67,21 +67,21 @@ func (h *handler) serveStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Add("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(ns); err != nil {
-		h.httpError(err, w, http.StatusInternalServerError)
+		h.httpError(w, err.Error(), http.StatusInternalServerError)
 	}
 }
 
-func (h *handler) httpError(err error, w http.ResponseWriter, status int) {
-	errmsg := err.Error()
-	if status/100 != 2 {
+// httpError writes an error to the client in a standard format.
+func (h *handler) httpError(w http.ResponseWriter, errmsg string, code int) {
+	if code/100 != 2 {
 		sz := math.Min(float64(len(errmsg)), 1024.0)
 		w.Header().Set("X-InfluxDB-Error", errmsg[:int(sz)])
 	}
 
-	errResp := &meta.ErrorResponse{Err: errmsg}
+	er := &meta.ErrorResponse{Err: errmsg}
 	w.Header().Add("Content-Type", "application/json")
-	w.WriteHeader(status)
-	b, _ := json.Marshal(errResp)
+	w.WriteHeader(code)
+	b, _ := json.Marshal(er)
 	w.Write(b)
 }
 

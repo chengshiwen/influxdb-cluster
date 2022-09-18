@@ -579,6 +579,95 @@ func (data *Data) DropShard(id uint64) {
 	}
 }
 
+// CopyShardOwner copies a shard owner by ID and NodeID.
+func (data *Data) CopyShardOwner(id, nodeID uint64) {
+	found := -1
+	for dbidx, dbi := range data.Databases {
+		for rpidx, rpi := range dbi.RetentionPolicies {
+			for sgidx, sg := range rpi.ShardGroups {
+				for sidx, s := range sg.Shards {
+					if s.ID == id {
+						found = sidx
+						break
+					}
+				}
+
+				if found > -1 {
+					nodeIdx := -1
+					s := sg.Shards[found]
+					for i, owner := range s.Owners {
+						if owner.NodeID == nodeID {
+							return
+						}
+						if owner.NodeID > nodeID && nodeIdx == -1 {
+							nodeIdx = i
+						}
+					}
+
+					if nodeIdx > -1 {
+						s.Owners = append(s.Owners[:nodeIdx+1], s.Owners[nodeIdx:]...)
+						s.Owners[nodeIdx] = ShardOwner{NodeID: nodeID}
+
+					} else {
+						s.Owners = append(s.Owners, ShardOwner{NodeID: nodeID})
+					}
+
+					data.Databases[dbidx].RetentionPolicies[rpidx].ShardGroups[sgidx].Shards[found].Owners = s.Owners
+					return
+				}
+			}
+		}
+	}
+}
+
+// RemoveShardOwner removes a shard owner by ID and NodeID.
+func (data *Data) RemoveShardOwner(id, nodeID uint64) {
+	found := -1
+	for dbidx, dbi := range data.Databases {
+		for rpidx, rpi := range dbi.RetentionPolicies {
+			for sgidx, sg := range rpi.ShardGroups {
+				for sidx, s := range sg.Shards {
+					if s.ID == id {
+						found = sidx
+						break
+					}
+				}
+
+				if found > -1 {
+					nodeIdx := -1
+					s := sg.Shards[found]
+					for i, owner := range s.Owners {
+						if owner.NodeID == nodeID {
+							nodeIdx = i
+							break
+						}
+					}
+
+					if nodeIdx > -1 {
+						// Data node owns shard, so relinquish ownership
+						// and set new owners on the shard.
+						s.Owners = append(s.Owners[:nodeIdx], s.Owners[nodeIdx+1:]...)
+						data.Databases[dbidx].RetentionPolicies[rpidx].ShardGroups[sgidx].Shards[found].Owners = s.Owners
+					}
+
+					// Shard no longer owned. Will need removing the shard.
+					if len(s.Owners) == 0 {
+						shards := sg.Shards
+						data.Databases[dbidx].RetentionPolicies[rpidx].ShardGroups[sgidx].Shards = append(shards[:found], shards[found+1:]...)
+
+						if len(shards) == 1 {
+							// We just deleted the last shard in the shard group.
+							data.Databases[dbidx].RetentionPolicies[rpidx].ShardGroups[sgidx].DeletedAt = time.Now()
+						}
+					}
+
+					return
+				}
+			}
+		}
+	}
+}
+
 // ShardGroups returns a list of all shard groups on a database and retention policy.
 func (data *Data) ShardGroups(database, policy string) ([]ShardGroupInfo, error) {
 	// Find retention policy.
@@ -659,14 +748,14 @@ func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time)
 		replicaN = len(data.DataNodes)
 	}
 
-	// Determine shard count by node count divided by replication factor.
+	// Determine shard count by the least common multiple of node count and
+	// replication factor divided by node count.
 	// This will ensure nodes will get distributed across nodes evenly and
 	// replicated the correct number of times.
-	n := 1
-	for n*len(data.DataNodes)%replicaN != 0 {
-		n++
+	shardN := 1
+	for shardN*replicaN%len(data.DataNodes) != 0 {
+		shardN++
 	}
-	shardN := n * len(data.DataNodes) / replicaN
 
 	// Create the shard group.
 	data.MaxShardGroupID++
@@ -1126,12 +1215,17 @@ func (data *Data) PruneShardGroups() {
 	expiration := time.Now().Add(ShardGroupDeletedExpiration)
 	for i, d := range data.Databases {
 		for j, rp := range d.RetentionPolicies {
+			var changed bool
 			var remainingShardGroups []ShardGroupInfo
 			for _, sgi := range rp.ShardGroups {
 				if sgi.DeletedAt.IsZero() || !expiration.After(sgi.DeletedAt) {
 					remainingShardGroups = append(remainingShardGroups, sgi)
 					continue
 				}
+				changed = true
+			}
+			if !changed {
+				continue
 			}
 			data.Databases[i].RetentionPolicies[j].ShardGroups = remainingShardGroups
 		}
@@ -2143,6 +2237,19 @@ const (
 	NodeStatusDisjoined = "disjoined"
 )
 
+type Announcement struct {
+	TCPAddr    string                   `json:"tcpAddr"`
+	HTTPAddr   string                   `json:"httpAddr"`
+	HTTPScheme string                   `json:"httpScheme"`
+	Time       time.Time                `json:"time"`
+	NodeType   string                   `json:"nodeType"`
+	Status     string                   `json:"status"`
+	Context    map[string]Announcements `json:"context"`
+	Version    string                   `json:"version"`
+}
+
+type Announcements map[string]*Announcement
+
 type DataNodeStatus struct {
 	NodeType   string   `json:"nodeType"`
 	Hostname   string   `json:"hostname"`
@@ -2162,10 +2269,12 @@ type MetaNodeStatus struct {
 }
 
 type DataNodeInfo struct {
-	ID       uint64 `json:"id"`
-	TCPAddr  string `json:"tcpAddr"`
-	HTTPAddr string `json:"httpAddr"`
-	Status   string `json:"status"`
+	ID         uint64 `json:"id"`
+	TCPAddr    string `json:"tcpAddr"`
+	HTTPAddr   string `json:"httpAddr"`
+	HTTPScheme string `json:"httpScheme"`
+	Status     string `json:"status"`
+	Version    string `json:"version"`
 }
 
 func NewDataNodeInfo(n *NodeInfo) *DataNodeInfo {
@@ -2177,9 +2286,11 @@ func NewDataNodeInfo(n *NodeInfo) *DataNodeInfo {
 }
 
 type MetaNodeInfo struct {
-	ID      uint64 `json:"id"`
-	Addr    string `json:"addr"`
-	TCPAddr string `json:"tcpAddr"`
+	ID         uint64 `json:"id"`
+	Addr       string `json:"addr"`
+	HTTPScheme string `json:"httpScheme"`
+	TCPAddr    string `json:"tcpAddr"`
+	Version    string `json:"version"`
 }
 
 func NewMetaNodeInfo(n *NodeInfo) *MetaNodeInfo {
@@ -2193,4 +2304,54 @@ func NewMetaNodeInfo(n *NodeInfo) *MetaNodeInfo {
 type ClusterInfo struct {
 	Data []*DataNodeInfo `json:"data"`
 	Meta []*MetaNodeInfo `json:"meta"`
+}
+
+type ClusterShardInfo struct {
+	ID              uint64            `json:"id"`
+	Database        string            `json:"database"`
+	RetentionPolicy string            `json:"retention-policy"`
+	ReplicaN        int               `json:"replica-n"`
+	ShardGroupID    uint64            `json:"shard-group-id"`
+	StartTime       time.Time         `json:"start-time"`
+	EndTime         time.Time         `json:"end-time"`
+	ExpireTime      time.Time         `json:"expire-time"`
+	TruncatedAt     time.Time         `json:"truncated-at"`
+	Owners          []*ShardOwnerInfo `json:"owners"`
+}
+
+type ShardOwnerInfo struct {
+	ID           uint64    `json:"id"`
+	TCPAddr      string    `json:"tcpAddr"`
+	State        string    `json:"state"`
+	LastModified time.Time `json:"last-modified"`
+	Size         int64     `json:"size"`
+	Err          string    `json:"err"`
+}
+
+type UserPrivilege struct {
+	Name     string `json:"name"`
+	Hash     string `json:"hash,omitempty"`
+	Password string `json:"password,omitempty"`
+}
+
+type UserPrivileges struct {
+	Users []*UserPrivilege `json:"users,omitempty"`
+}
+
+type UserOperation struct {
+	Action string         `json:"action"`
+	User   *UserPrivilege `json:"user"`
+}
+
+type RolePrivilege struct {
+	Name string `json:"name"`
+}
+
+type RolePrivileges struct {
+	Roles []*RolePrivilege `json:"roles,omitempty"`
+}
+
+type RoleOperation struct {
+	Action string         `json:"action"`
+	Role   *RolePrivilege `json:"role"`
 }

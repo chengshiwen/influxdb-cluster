@@ -11,6 +11,7 @@ import (
 
 	internal "github.com/influxdata/influxdb/services/meta/internal"
 	"go.uber.org/zap"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/hashicorp/raft"
@@ -18,8 +19,7 @@ import (
 
 // Raft configuration.
 const (
-	raftListenerStartupTimeout = time.Second
-	raftRemoveGracePeriod      = 5 * time.Second
+	raftRemoveGracePeriod = 5 * time.Second
 )
 
 type store struct {
@@ -145,14 +145,14 @@ func (s *store) openRaft(raftln net.Listener) error {
 	return nil
 }
 
-func (s *store) bootstrapCluster() error {
+func (s *store) bootstrap() error {
 	s.mu.RLock()
 	if s.raftState == nil || s.raftState.raft == nil {
 		s.mu.RUnlock()
 		return fmt.Errorf("store not open")
 	}
 	s.mu.RUnlock()
-	err := s.raftState.bootstrapCluster()
+	err := s.raftState.bootstrap()
 	if err != nil {
 		return err
 	}
@@ -195,7 +195,17 @@ func (s *store) afterIndex(index uint64) <-chan struct{} {
 	return s.dataChanged
 }
 
-// WaitForLeader sleeps until a leader is found or a timeout occurs.
+// state returns the state of this raft peer.
+func (s *store) state() raft.RaftState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.raftState == nil || s.raftState.raft == nil {
+		return raft.Shutdown
+	}
+	return s.raftState.raft.State()
+}
+
+// waitForLeader sleeps until a leader is found or a timeout occurs.
 // timeout == 0 means to wait forever.
 func (s *store) waitForLeader(timeout time.Duration) error {
 	// Begin timeout timer.
@@ -225,7 +235,7 @@ func (s *store) waitForLeader(timeout time.Duration) error {
 func (s *store) isLeader() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.raftState == nil {
+	if s.raftState == nil || s.raftState.raft == nil {
 		return false
 	}
 	return s.raftState.raft.State() == raft.Leader
@@ -239,7 +249,8 @@ func (s *store) leader() string {
 	if s.raftState == nil || s.raftState.raft == nil {
 		return ""
 	}
-	return string(s.raftState.raft.Leader())
+	l, _ := s.raftState.raft.LeaderWithID()
+	return string(l)
 }
 
 // leaderHTTP returns the HTTP API connection info for the metanode
@@ -250,7 +261,7 @@ func (s *store) leaderHTTP() string {
 	if s.raftState == nil {
 		return ""
 	}
-	l := s.raftState.raft.Leader()
+	l, _ := s.raftState.raft.LeaderWithID()
 
 	for _, n := range s.data.MetaNodes {
 		if n.TCPAddr == string(l) {
@@ -284,6 +295,19 @@ func (s *store) otherMetaServersHTTP() []string {
 		if n.TCPAddr != s.raftAddr {
 			a = append(a, n.Addr)
 		}
+	}
+	return a
+}
+
+// dataServers will return the TCP bind addresses of the
+// data servers in the cluster
+func (s *store) dataServers() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var a []string
+	for _, n := range s.data.DataNodes {
+		a = append(a, n.TCPAddr)
 	}
 	return a
 }
@@ -338,7 +362,7 @@ func (s *store) join(addr, raftAddr string) (*NodeInfo, error) {
 }
 
 // leave removes a server from the metaservice and raft
-func (s *store) leave(raftAddr string) (err error) {
+func (s *store) leave(raftAddr string) error {
 	s.mu.RLock()
 	if s.raftState == nil {
 		s.mu.RUnlock()
@@ -356,8 +380,7 @@ func (s *store) leave(raftAddr string) (err error) {
 		if s.raftState.attemptLeadershipTransfer() {
 			isLeader = false
 		} else {
-			err = s.raftState.removePeer(raftAddr)
-			if err != nil {
+			if err := s.raftState.removePeer(raftAddr); err != nil {
 				s.logger.Error("Failed to remove peer", zap.String("addr", raftAddr), zap.Error(err))
 			}
 		}
@@ -396,7 +419,8 @@ func (s *store) leave(raftAddr string) (err error) {
 			s.logger.Warn("Failed to leave raft gracefully, timeout")
 		}
 	}
-	return
+
+	return s.reset()
 }
 
 // remove a server from the metaservice and raft
@@ -415,10 +439,6 @@ func (s *store) remove(addr string) error {
 		s.mu.RUnlock()
 		return fmt.Errorf("store not open")
 	}
-	if len(s.peers()) <= 1 {
-		s.mu.RUnlock()
-		return ErrNodeUnableToDropFinalNode
-	}
 	s.mu.RUnlock()
 
 	if err = s.deleteMetaNode(n.ID); err != nil {
@@ -426,16 +446,49 @@ func (s *store) remove(addr string) error {
 	}
 
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	for _, node := range s.data.MetaNodes {
 		if node.Addr == n.Addr || node.TCPAddr == n.TCPAddr {
+			s.mu.RUnlock()
 			return ErrNodeUnableToDropNode
 		}
 	}
+	s.mu.RUnlock()
 
+	if len(s.peers()) <= 1 {
+		return s.reset()
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if err = s.raftState.removePeer(n.TCPAddr); err != nil {
 		return err
 	}
+	return nil
+}
+
+// reset the metaservice and raft
+func (s *store) reset() error {
+	s.mu.Lock()
+	raftln := s.raftState.ln
+	if err := s.raftState.close(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	s.data = &Data{
+		Index: 1,
+	}
+	s.mu.Unlock()
+
+	if err := os.RemoveAll(s.path); err != nil {
+		return fmt.Errorf("remove all: %s", err)
+	}
+	if err := os.MkdirAll(s.path, 0777); err != nil {
+		return fmt.Errorf("mkdir all: %s", err)
+	}
+	if err := s.openRaft(raftln); err != nil {
+		return fmt.Errorf("raft: %s", err)
+	}
+
 	return nil
 }
 
@@ -502,6 +555,42 @@ func (s *store) dataNodeByTCPAddr(tcpAddr string) (*NodeInfo, error) {
 		}
 	}
 	return nil, ErrNodeNotFound
+}
+
+func (s *store) dataNode(id uint64) (*NodeInfo, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, node := range s.data.DataNodes {
+		if node.ID == id {
+			return &node, nil
+		}
+	}
+	return nil, ErrNodeNotFound
+}
+
+// copyShard copies a shard in the metastore
+func (s *store) copyShard(id, nodeID uint64) error {
+	if !s.isLeader() {
+		return raft.ErrNotLeader
+	}
+	return s.copyShardOwner(id, nodeID)
+}
+
+// removeShard removes a shard in the metastore
+func (s *store) removeShard(id, nodeID uint64) error {
+	if !s.isLeader() {
+		return raft.ErrNotLeader
+	}
+	return s.removeShardOwner(id, nodeID)
+}
+
+// truncateShards truncates current shards
+func (s *store) truncateShards(delay time.Duration) error {
+	if !s.isLeader() {
+		return raft.ErrNotLeader
+	}
+	timestamp := time.Now().Add(delay)
+	return s.truncateShardGroups(timestamp)
 }
 
 // createMetaNode is used by the join command to create the metanode in
@@ -611,6 +700,185 @@ func (s *store) updateDataNode(id uint64, addr, tcpAddr string) error {
 	return s.apply(b)
 }
 
+// copyShardOwner is used by the copy-shard command to copy a shard
+func (s *store) copyShardOwner(id, nodeID uint64) error {
+	val := &internal.CopyShardOwnerCommand{
+		ID:     proto.Uint64(id),
+		NodeID: proto.Uint64(nodeID),
+	}
+	t := internal.Command_CopyShardOwnerCommand
+	cmd := &internal.Command{Type: &t}
+	if err := proto.SetExtension(cmd, internal.E_CopyShardOwnerCommand_Command, val); err != nil {
+		panic(err)
+	}
+
+	b, err := proto.Marshal(cmd)
+	if err != nil {
+		return err
+	}
+
+	return s.apply(b)
+}
+
+// removeShardOwner is used by the remove-shard command to remove a shard
+func (s *store) removeShardOwner(id, nodeID uint64) error {
+	val := &internal.RemoveShardOwnerCommand{
+		ID:     proto.Uint64(id),
+		NodeID: proto.Uint64(nodeID),
+	}
+	t := internal.Command_RemoveShardOwnerCommand
+	cmd := &internal.Command{Type: &t}
+	if err := proto.SetExtension(cmd, internal.E_RemoveShardOwnerCommand_Command, val); err != nil {
+		panic(err)
+	}
+
+	b, err := proto.Marshal(cmd)
+	if err != nil {
+		return err
+	}
+
+	return s.apply(b)
+}
+
+// truncateShardGroups is used by the truncate-shards command to truncate shard groups
+func (s *store) truncateShardGroups(timestamp time.Time) error {
+	val := &internal.TruncateShardGroupsCommand{
+		Timestamp: proto.Int64(timestamp.UnixNano()),
+	}
+	t := internal.Command_TruncateShardGroupsCommand
+	cmd := &internal.Command{Type: &t}
+	if err := proto.SetExtension(cmd, internal.E_TruncateShardGroupsCommand_Command, val); err != nil {
+		panic(err)
+	}
+
+	b, err := proto.Marshal(cmd)
+	if err != nil {
+		return err
+	}
+
+	return s.apply(b)
+}
+
+// createUser is used to create a user.
+func (s *store) createUser(name, password string, admin bool) error {
+	if !s.isLeader() {
+		return raft.ErrNotLeader
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
+	if err != nil {
+		return err
+	}
+
+	val := &internal.CreateUserCommand{
+		Name:  proto.String(name),
+		Hash:  proto.String(string(hash)),
+		Admin: proto.Bool(admin),
+	}
+	t := internal.Command_CreateUserCommand
+	cmd := &internal.Command{Type: &t}
+	if err := proto.SetExtension(cmd, internal.E_CreateUserCommand_Command, val); err != nil {
+		panic(err)
+	}
+
+	b, err := proto.Marshal(cmd)
+	if err != nil {
+		return err
+	}
+
+	return s.apply(b)
+}
+
+// dropUser is used to drop a user.
+func (s *store) dropUser(name string) error {
+	if !s.isLeader() {
+		return raft.ErrNotLeader
+	}
+
+	val := &internal.DropUserCommand{
+		Name: proto.String(name),
+	}
+	t := internal.Command_DropUserCommand
+	cmd := &internal.Command{Type: &t}
+	if err := proto.SetExtension(cmd, internal.E_DropUserCommand_Command, val); err != nil {
+		panic(err)
+	}
+
+	b, err := proto.Marshal(cmd)
+	if err != nil {
+		return err
+	}
+
+	return s.apply(b)
+}
+
+// updateUser is used to update a user.
+func (s *store) updateUser(name, password string) error {
+	if !s.isLeader() {
+		return raft.ErrNotLeader
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
+	if err != nil {
+		return err
+	}
+
+	val := &internal.UpdateUserCommand{
+		Name: proto.String(name),
+		Hash: proto.String(string(hash)),
+	}
+	t := internal.Command_UpdateUserCommand
+	cmd := &internal.Command{Type: &t}
+	if err := proto.SetExtension(cmd, internal.E_UpdateUserCommand_Command, val); err != nil {
+		panic(err)
+	}
+
+	b, err := proto.Marshal(cmd)
+	if err != nil {
+		return err
+	}
+
+	return s.apply(b)
+}
+
+func (s *store) adminUserExists() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data.AdminUserExists()
+}
+
+func (s *store) authenticate(username, password string) (User, error) {
+	// Find user.
+	s.mu.RLock()
+	userInfo := s.data.user(username)
+	s.mu.RUnlock()
+	if userInfo == nil {
+		return nil, ErrUserNotFound
+	}
+
+	// Compare password with user hash.
+	if err := bcrypt.CompareHashAndPassword([]byte(userInfo.Hash), []byte(password)); err != nil {
+		return nil, ErrAuthenticate
+	}
+	return userInfo, nil
+}
+
+func (s *store) user(name string) (User, error) {
+	s.mu.RLock()
+	u := s.data.user(name)
+	s.mu.RUnlock()
+	if u == nil {
+		return nil, ErrUserNotFound
+	}
+	return u, nil
+}
+
+func (s *store) users() []UserInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data.Users
+}
+
 func (s *store) nodeID() uint64 {
 	n, err := s.metaNodeByAddr(s.httpAddr)
 	if err != nil {
@@ -637,21 +905,93 @@ func (s *store) status() *MetaNodeStatus {
 
 func (s *store) cluster() *ClusterInfo {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	dns, mns := s.data.DataNodes, s.data.MetaNodes
+	s.mu.RUnlock()
 	ci := &ClusterInfo{}
-	if s.leader() != "" && len(s.data.DataNodes) > 0 {
-		data := make([]*DataNodeInfo, len(s.data.DataNodes))
-		for i, n := range s.data.DataNodes {
-			data[i] = &DataNodeInfo{n.ID, n.TCPAddr, n.Addr, NodeStatusJoined}
+	if s.leader() != "" && len(dns) > 0 {
+		data := make([]*DataNodeInfo, len(dns))
+		for i, n := range dns {
+			data[i] = &DataNodeInfo{
+				ID:       n.ID,
+				TCPAddr:  n.TCPAddr,
+				HTTPAddr: n.Addr,
+				Status:   NodeStatusJoined,
+			}
 		}
 		ci.Data = data
 	}
-	if s.leader() != "" && len(s.data.MetaNodes) > 0 {
-		meta := make([]*MetaNodeInfo, len(s.data.MetaNodes))
-		for i, n := range s.data.MetaNodes {
-			meta[i] = &MetaNodeInfo{n.ID, n.Addr, n.TCPAddr}
+	if s.leader() != "" && len(mns) > 0 {
+		meta := make([]*MetaNodeInfo, len(mns))
+		for i, n := range mns {
+			meta[i] = &MetaNodeInfo{
+				ID:      n.ID,
+				Addr:    n.Addr,
+				TCPAddr: n.TCPAddr,
+			}
 		}
 		ci.Meta = meta
 	}
 	return ci
+}
+
+func (s *store) shards() []*ClusterShardInfo {
+	s.mu.RLock()
+	dis := s.data.Databases
+	s.mu.RUnlock()
+	var shardInfos []*ClusterShardInfo
+	for _, di := range dis {
+		for _, rpi := range di.RetentionPolicies {
+			for _, sgi := range rpi.ShardGroups {
+				if sgi.Deleted() {
+					continue
+				}
+				for _, si := range sgi.Shards {
+					shardInfo := s.shardInfo(di, rpi, sgi, si)
+					shardInfos = append(shardInfos, shardInfo)
+				}
+			}
+		}
+	}
+	return shardInfos
+}
+
+func (s *store) shard(id uint64) *ClusterShardInfo {
+	s.mu.RLock()
+	dis := s.data.Databases
+	s.mu.RUnlock()
+	for _, di := range dis {
+		for _, rpi := range di.RetentionPolicies {
+			for _, sgi := range rpi.ShardGroups {
+				for _, si := range sgi.Shards {
+					if si.ID == id {
+						return s.shardInfo(di, rpi, sgi, si)
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (s *store) shardInfo(di DatabaseInfo, rpi RetentionPolicyInfo, sgi ShardGroupInfo, si ShardInfo) *ClusterShardInfo {
+	owners := make([]*ShardOwnerInfo, len(si.Owners))
+	for i, owner := range si.Owners {
+		n, _ := s.dataNode(owner.NodeID)
+		owners[i] = &ShardOwnerInfo{
+			ID:      owner.NodeID,
+			TCPAddr: n.TCPAddr,
+		}
+	}
+	return &ClusterShardInfo{
+		ID:              si.ID,
+		Database:        di.Name,
+		RetentionPolicy: rpi.Name,
+		ReplicaN:        rpi.ReplicaN,
+		ShardGroupID:    sgi.ID,
+		StartTime:       sgi.StartTime,
+		EndTime:         sgi.EndTime,
+		ExpireTime:      sgi.EndTime.Add(rpi.Duration),
+		TruncatedAt:     sgi.TruncatedAt,
+		Owners:          owners,
+	}
 }

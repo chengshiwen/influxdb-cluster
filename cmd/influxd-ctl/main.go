@@ -6,16 +6,24 @@ import (
 	"io"
 	"math/rand"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/influxdata/influxdb/cmd"
 	"github.com/influxdata/influxdb/cmd/influxd-ctl/add_data"
 	"github.com/influxdata/influxdb/cmd/influxd-ctl/add_meta"
 	"github.com/influxdata/influxdb/cmd/influxd-ctl/common"
+	"github.com/influxdata/influxdb/cmd/influxd-ctl/copy_shard"
 	"github.com/influxdata/influxdb/cmd/influxd-ctl/help"
+	"github.com/influxdata/influxdb/cmd/influxd-ctl/join"
+	"github.com/influxdata/influxdb/cmd/influxd-ctl/leave"
 	"github.com/influxdata/influxdb/cmd/influxd-ctl/remove_data"
 	"github.com/influxdata/influxdb/cmd/influxd-ctl/remove_meta"
+	"github.com/influxdata/influxdb/cmd/influxd-ctl/remove_shard"
 	"github.com/influxdata/influxdb/cmd/influxd-ctl/show"
+	"github.com/influxdata/influxdb/cmd/influxd-ctl/show_shards"
+	"github.com/influxdata/influxdb/cmd/influxd-ctl/token"
+	"github.com/influxdata/influxdb/cmd/influxd-ctl/truncate_shards"
 	"github.com/influxdata/influxdb/cmd/influxd-ctl/update_data"
 )
 
@@ -71,6 +79,21 @@ func (m *Main) Run(args ...string) error {
 		if err := cmd.Run(args...); err != nil {
 			return fmt.Errorf("add-meta: %s", err)
 		}
+	case "copy-shard":
+		cmd := copy_shard.NewCommand(cOpts)
+		if err := cmd.Run(args...); err != nil {
+			return fmt.Errorf("copy-shard: %s", err)
+		}
+	case "join":
+		cmd := join.NewCommand(cOpts)
+		if err := cmd.Run(args...); err != nil {
+			return fmt.Errorf("join: %s", err)
+		}
+	case "leave":
+		cmd := leave.NewCommand(cOpts)
+		if err := cmd.Run(args...); err != nil {
+			return fmt.Errorf("leave: %s", err)
+		}
 	case "remove-data":
 		cmd := remove_data.NewCommand(cOpts)
 		if err := cmd.Run(args...); err != nil {
@@ -81,15 +104,35 @@ func (m *Main) Run(args ...string) error {
 		if err := cmd.Run(args...); err != nil {
 			return fmt.Errorf("remove-meta: %s", err)
 		}
+	case "remove-shard":
+		cmd := remove_shard.NewCommand(cOpts)
+		if err := cmd.Run(args...); err != nil {
+			return fmt.Errorf("remove-shard: %s", err)
+		}
 	case "show":
 		cmd := show.NewCommand(cOpts)
 		if err := cmd.Run(args...); err != nil {
 			return fmt.Errorf("show: %s", err)
 		}
+	case "show-shards":
+		cmd := show_shards.NewCommand(cOpts)
+		if err := cmd.Run(args...); err != nil {
+			return fmt.Errorf("show-shards: %s", err)
+		}
 	case "update-data":
 		cmd := update_data.NewCommand(cOpts)
 		if err := cmd.Run(args...); err != nil {
 			return fmt.Errorf("update-data: %s", err)
+		}
+	case "token":
+		cmd := token.NewCommand(cOpts)
+		if err := cmd.Run(args...); err != nil {
+			return fmt.Errorf("token: %s", err)
+		}
+	case "truncate-shards":
+		cmd := truncate_shards.NewCommand(cOpts)
+		if err := cmd.Run(args...); err != nil {
+			return fmt.Errorf("truncate-shards: %s", err)
 		}
 	default:
 		return fmt.Errorf(`unknown command "%s"`+"\n"+`Run 'influxd-ctl help' for usage`+"\n\n", name)
@@ -113,5 +156,11 @@ func (m *Main) parseFlags(args []string) (*common.Options, []string, error) {
 	if err := fs.Parse(args); err != nil {
 		return options, args, err
 	}
+
+	authType := strings.ToLower(options.AuthType)
+	if authType != "none" && authType != "basic" && authType != "jwt" {
+		return options, fs.Args(), fmt.Errorf("invalid -auth-type: %s", options.AuthType)
+	}
+	options.AuthType = authType
 	return options, fs.Args(), nil
 }

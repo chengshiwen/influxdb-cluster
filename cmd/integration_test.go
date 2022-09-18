@@ -160,6 +160,7 @@ func (c *TestMetaRunCommand) AddData(addr string) {
 		BindAddr: c.BoundHTTPAddr(),
 	}
 	client := common.NewHTTPClient(cOpts)
+	defer client.Close()
 	data := url.Values{"addr": {addr}}
 	resp, err := client.PostForm("/add-data", data)
 	if err != nil {

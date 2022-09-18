@@ -1,6 +1,7 @@
 package meta
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/hashicorp/raft"
 	"github.com/hashicorp/raft-boltdb/v2"
+	"github.com/influxdata/influxdb/tcp"
 	"go.uber.org/zap"
 )
 
@@ -66,7 +68,8 @@ func (r *raftState) open(s *store, ln net.Listener) error {
 	config.ShutdownOnRemove = false
 
 	// Build raft layer to multiplex listener.
-	r.raftLayer = newRaftLayer(r.addr, r.ln)
+	tlsC := r.config.TLSClientConfig()
+	r.raftLayer = newRaftLayer(r.addr, tlsC, r.ln)
 
 	// Create a transport layer
 	r.transport = raft.NewNetworkTransport(r.raftLayer, raftTransportMaxPool, raftTransportTimeout, config.LogOutput)
@@ -122,7 +125,7 @@ func (r *raftState) bootstrapConfiguration() raft.Configuration {
 	}
 }
 
-func (r *raftState) bootstrapCluster() error {
+func (r *raftState) bootstrap() error {
 	if !r.config.SingleServer && r.leader() == "" {
 		configuration := r.bootstrapConfiguration()
 		future := r.raft.BootstrapCluster(configuration)
@@ -161,11 +164,6 @@ func (r *raftState) close() error {
 	if r.transport != nil {
 		r.transport.Close()
 		r.transport = nil
-	}
-
-	if r.raftLayer != nil {
-		r.raftLayer.Close()
-		r.raftLayer = nil
 	}
 
 	// Shutdown raft.
@@ -274,7 +272,8 @@ func (r *raftState) leader() string {
 	if r.raft == nil {
 		return ""
 	}
-	return string(r.raft.Leader())
+	l, _ := r.raft.LeaderWithID()
+	return string(l)
 }
 
 func (r *raftState) isLeader() bool {
@@ -301,8 +300,8 @@ func (r *raftState) attemptLeadershipTransfer() bool {
 // raftLayer wraps the connection so it can be re-used for forwarding.
 type raftLayer struct {
 	addr   *raftLayerAddr
+	tlsC   *tls.Config
 	ln     net.Listener
-	conn   chan net.Conn
 	closed chan struct{}
 }
 
@@ -319,11 +318,11 @@ func (r *raftLayerAddr) String() string {
 }
 
 // newRaftLayer returns a new instance of raftLayer.
-func newRaftLayer(addr string, ln net.Listener) *raftLayer {
+func newRaftLayer(addr string, tlsC *tls.Config, ln net.Listener) *raftLayer {
 	return &raftLayer{
 		addr:   &raftLayerAddr{addr},
+		tlsC:   tlsC,
 		ln:     ln,
-		conn:   make(chan net.Conn),
 		closed: make(chan struct{}),
 	}
 }
@@ -335,7 +334,7 @@ func (l *raftLayer) Addr() net.Addr {
 
 // Dial creates a new network connection.
 func (l *raftLayer) Dial(addr raft.ServerAddress, timeout time.Duration) (net.Conn, error) {
-	conn, err := net.DialTimeout("tcp", string(addr), timeout)
+	conn, err := tcp.DialTLSTimeout("tcp", string(addr), l.tlsC, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -352,4 +351,9 @@ func (l *raftLayer) Dial(addr raft.ServerAddress, timeout time.Duration) (net.Co
 func (l *raftLayer) Accept() (net.Conn, error) { return l.ln.Accept() }
 
 // Close closes the layer.
-func (l *raftLayer) Close() error { return l.ln.Close() }
+func (l *raftLayer) Close() error {
+	if l.closed != nil {
+		close(l.closed)
+	}
+	return nil
+}

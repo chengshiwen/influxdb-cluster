@@ -11,6 +11,7 @@ import (
 	"runtime/pprof"
 	"time"
 
+	"github.com/influxdata/influxdb/coordinator"
 	"github.com/influxdata/influxdb/logger"
 	"github.com/influxdata/influxdb/services/meta"
 	"github.com/influxdata/influxdb/tcp"
@@ -108,6 +109,8 @@ func NewServer(c *Config, buildInfo *BuildInfo) (*Server, error) {
 		config: c,
 	}
 
+	dataTLSConfig := tcp.TLSClientConfig(c.Meta.DataUseTLS, c.Meta.DataInsecureTLS)
+	s.MetaService.RPCClient = coordinator.NewClient(dataTLSConfig, coordinator.DefaultDialTimeout)
 	s.MetaService.Version = s.buildInfo.Version
 	return s, nil
 }
@@ -123,7 +126,11 @@ func (s *Server) Open() error {
 	}
 
 	// Open shared TCP connection.
-	ln, err := net.Listen("tcp", s.BindAddress)
+	tlsConfig, err := s.config.Meta.TLSConfig()
+	if err != nil {
+		return fmt.Errorf("tls config: %s", err)
+	}
+	ln, err := tcp.ListenTLS("tcp", s.BindAddress, tlsConfig)
 	if err != nil {
 		return fmt.Errorf("listen: %s", err)
 	}

@@ -24,6 +24,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/logger"
+	"github.com/influxdata/influxdb/pkg/httputil"
 	internal "github.com/influxdata/influxdb/services/meta/internal"
 	"github.com/influxdata/influxql"
 	"go.uber.org/zap"
@@ -75,8 +76,7 @@ type Client struct {
 	opened      bool
 
 	config  *Config
-	tls     bool
-	skipTLS bool
+	client  *httputil.Client
 	tcpAddr string
 
 	path string
@@ -97,9 +97,15 @@ func NewClient(config *Config) *Client {
 		logger:    zap.NewNop(),
 		authCache: make(map[string]authUser),
 		config:    config,
-		tls:       config.MetaTLSEnabled,
-		skipTLS:   config.MetaInsecureTLS,
-		path:      config.Dir,
+		client: httputil.NewClient(httputil.Config{
+			AuthEnabled: config.MetaAuthEnabled,
+			AuthType:    httputil.AuthTypeJWT,
+			Secret:      config.MetaInternalSharedSecret,
+			UserAgent:   "InfluxDB Meta Client",
+			UseTLS:      config.MetaTLSEnabled,
+			SkipTLS:     config.MetaInsecureTLS,
+		}),
+		path: config.Dir,
 	}
 }
 
@@ -134,9 +140,7 @@ func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if t, ok := http.DefaultTransport.(*http.Transport); ok {
-		t.CloseIdleConnections()
-	}
+	c.client.CloseIdleConnections()
 
 	select {
 	case <-c.closing:
@@ -168,6 +172,13 @@ func (c *Client) MetaServers() []string {
 	return c.metaServers
 }
 
+// SetTCPAddr updates the tcp addr on the client.
+func (c *Client) SetTCPAddr(tcpAddr string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tcpAddr = tcpAddr
+}
+
 // Ping will hit the ping endpoint for the metaservice and return nil if
 // it returns 200. If checkAllMetaServers is set to true, it will hit the
 // ping endpoint and tell it to verify the health of all metaservers in the
@@ -185,7 +196,7 @@ func (c *Client) Ping(checkAllMetaServers bool) error {
 		url = url + "?all=true"
 	}
 
-	resp, err := http.Get(url)
+	resp, err := c.client.Get(url)
 	if err != nil {
 		return err
 	}
@@ -231,7 +242,7 @@ func (c *Client) acquireLease(name string) (*Lease, error) {
 	c.mu.RUnlock()
 	url := fmt.Sprintf("%s/lease?name=%s&nodeid=%d", c.url(server), name, c.nodeID)
 
-	resp, err := http.Get(url)
+	resp, err := c.client.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -925,7 +936,7 @@ func (c *Client) PrecreateShardGroups(from, to time.Time) error {
 					continue
 				}
 				newGroup, err := c.CreateShardGroup(di.Name, rp.Name, nextShardGroupTime)
-				if err != nil {
+				if err != nil || newGroup == nil {
 					c.logger.Info("Failed to precreate successive shard group",
 						zap.Uint64("group_id", g.ID), zap.Error(err))
 					continue
@@ -1044,17 +1055,9 @@ func (c *Client) Status() (*MetaNodeStatus, error) {
 	server := c.metaServers[0]
 	c.mu.RUnlock()
 	url := c.url(server) + "/status"
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, DecodeErrorResponse(resp.Body)
-	}
 
 	ns := &MetaNodeStatus{}
-	if err = json.NewDecoder(resp.Body).Decode(ns); err != nil {
+	if err := requestStatus(c.client, url, ns); err != nil {
 		return nil, err
 	}
 	return ns, nil
@@ -1121,7 +1124,7 @@ func (c *Client) retryUntilExec(typ internal.Command_Type, desc *proto.Extension
 			c.mu.RUnlock()
 
 			url = fmt.Sprintf("://%s/execute", server)
-			if c.tls {
+			if c.config.MetaTLSEnabled {
 				url = "https" + url
 			} else {
 				url = "http" + url
@@ -1166,7 +1169,7 @@ func (c *Client) exec(url string, typ internal.Command_Type, desc *proto.Extensi
 		return 0, err
 	}
 
-	resp, err := http.Post(url, "application/octet-stream", bytes.NewBuffer(b))
+	resp, err := c.client.Post(url, "application/octet-stream", bytes.NewBuffer(b))
 	if err != nil {
 		return 0, err
 	}
@@ -1235,7 +1238,7 @@ func (c *Client) pollForUpdates() {
 }
 
 func (c *Client) getSnapshot(server string, index uint64) (*Data, error) {
-	resp, err := http.Get(c.url(server) + fmt.Sprintf("?index=%d", index))
+	resp, err := c.client.Get(c.url(server) + fmt.Sprintf("?index=%d", index))
 	if err != nil {
 		return nil, err
 	}
@@ -1260,7 +1263,7 @@ func (c *Client) getSnapshot(server string, index uint64) (*Data, error) {
 func (c *Client) url(server string) string {
 	url := fmt.Sprintf("://%s", server)
 
-	if c.tls {
+	if c.config.MetaTLSEnabled {
 		url = "https" + url
 	} else {
 		url = "http" + url
@@ -1360,18 +1363,6 @@ func (c *Client) updateMetaServers() {
 			c.logger.Info("Opened client")
 		}
 	}
-}
-
-// SetTCPAddr updates the tcp addr on the client.
-func (c *Client) SetTCPAddr(tcpAddr string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.tcpAddr = c.RemoteAddr(tcpAddr)
-}
-
-// RemoteAddr returns the remote address.
-func (c *Client) RemoteAddr(addr string) string {
-	return RemoteAddr(c.config.RemoteHostname, addr)
 }
 
 // Load loads the current client file from disk.

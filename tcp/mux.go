@@ -307,10 +307,14 @@ func Dial(network, address string, header byte) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	return WriteHeader(conn, header)
+}
 
+// WriteHeader writes mux header into conn.
+func WriteHeader(conn net.Conn, header byte) (net.Conn, error) {
 	if _, err := conn.Write([]byte{header}); err != nil {
+		conn.Close()
 		return nil, fmt.Errorf("write mux header: %s", err)
 	}
-
 	return conn, nil
 }

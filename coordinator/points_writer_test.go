@@ -333,9 +333,12 @@ func TestPointsWriter_WritePoints(t *testing.T) {
 			},
 		}
 
-		hh := &fakeShardWriter{
+		hh := &fakeHintedHandoff{
 			ShardWriteFn: func(shardID, nodeID uint64, points []models.Point) error {
 				return nil
+			},
+			EmptyFn: func(shardID, nodeID uint64) bool {
+				return true
 			},
 		}
 
@@ -568,6 +571,19 @@ type fakeShardWriter struct {
 
 func (f *fakeShardWriter) WriteShard(shardID, nodeID uint64, points []models.Point) error {
 	return f.ShardWriteFn(shardID, nodeID, points)
+}
+
+type fakeHintedHandoff struct {
+	ShardWriteFn func(shardID, nodeID uint64, points []models.Point) error
+	EmptyFn      func(shardID, nodeID uint64) bool
+}
+
+func (f *fakeHintedHandoff) WriteShard(shardID, nodeID uint64, points []models.Point) error {
+	return f.ShardWriteFn(shardID, nodeID, points)
+}
+
+func (f *fakeHintedHandoff) Empty(shardID, nodeID uint64) bool {
+	return f.EmptyFn(shardID, nodeID)
 }
 
 type fakeStore struct {

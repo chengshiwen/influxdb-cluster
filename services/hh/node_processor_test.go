@@ -9,7 +9,6 @@ import (
 
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/services/meta"
-	"go.uber.org/zap"
 )
 
 type fakeShardWriter struct {
@@ -68,7 +67,7 @@ func TestNodeProcessorSendBlock(t *testing.T) {
 		},
 	}
 
-	n := NewNodeProcessor(NewConfig(), expNodeID, dir, sh, metastore, zap.NewNop())
+	n := NewNodeProcessor(NewConfig(), expNodeID, expShardID, dir, sh, metastore)
 	if n == nil {
 		t.Fatalf("Failed to create node processor: %v", err)
 	}
@@ -87,7 +86,7 @@ func TestNodeProcessorSendBlock(t *testing.T) {
 	}
 
 	// This should queue a write for the active node.
-	if err := n.WriteShard(expShardID, []models.Point{pt}); err != nil {
+	if err := n.WriteShard([]models.Point{pt}); err != nil {
 		t.Fatalf("SendWrite() failed to write points: %v", err)
 	}
 
@@ -129,7 +128,7 @@ func TestNodeProcessorSendBlock(t *testing.T) {
 	}
 
 	// This should queue a write for the node.
-	if err := n.WriteShard(expShardID, []models.Point{pt}); err != nil {
+	if err := n.WriteShard([]models.Point{pt}); err != nil {
 		t.Fatalf("SendWrite() failed to write points: %v", err)
 	}
 

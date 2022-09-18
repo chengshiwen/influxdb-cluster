@@ -1,64 +1,24 @@
-package rpc
+package coordinator
 
 import (
-	"encoding"
-	"encoding/binary"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"net"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/coordinator/internal"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/query"
+	"github.com/influxdata/influxdb/services/meta"
+	"github.com/influxdata/influxdb/tcp"
+	"github.com/influxdata/influxdb/tsdb"
 	"github.com/influxdata/influxql"
 )
 
-// MaxMessageSize defines how large a message can be before we reject it
-const MaxMessageSize = 1024 * 1024 * 1024 // 1GB
-
-// MuxHeader is the header byte used for the TCP muxer.
-const MuxHeader = 2
-
-const (
-	WriteShardRequestMessage byte = iota + 1
-	WriteShardResponseMessage
-
-	ExecuteStatementRequestMessage
-	ExecuteStatementResponseMessage
-
-	CreateIteratorRequestMessage
-	CreateIteratorResponseMessage
-
-	IteratorCostRequestMessage
-	IteratorCostResponseMessage
-
-	FieldDimensionsRequestMessage
-	FieldDimensionsResponseMessage
-
-	MapTypeRequestMessage
-	MapTypeResponseMessage
-
-	ExpandSourcesRequestMessage
-	ExpandSourcesResponseMessage
-
-	BackupShardRequestMessage
-	BackupShardResponseMessage
-
-	CopyShardRequestMessage
-	CopyShardResponseMessage
-
-	RemoveShardRequestMessage
-	RemoveShardResponseMessage
-
-	JoinClusterRequestMessage
-	JoinClusterResponseMessage
-
-	LeaveClusterRequestMessage
-	LeaveClusterResponseMessage
-)
+//go:generate protoc --gogo_out=. internal/data.proto
 
 // WriteShardRequest represents the a request to write a slice of points to a shard
 type WriteShardRequest struct {
@@ -226,6 +186,319 @@ func (w *ExecuteStatementResponse) MarshalBinary() ([]byte, error) {
 func (w *ExecuteStatementResponse) UnmarshalBinary(buf []byte) error {
 	if err := proto.Unmarshal(buf, &w.pb); err != nil {
 		return err
+	}
+	return nil
+}
+
+// MeasurementNamesRequest represents a request to retrieve measurement names.
+type MeasurementNamesRequest struct {
+	Database  string
+	Condition influxql.Expr
+}
+
+// MarshalBinary encodes r to a binary format.
+func (r *MeasurementNamesRequest) MarshalBinary() ([]byte, error) {
+	var condition string
+	if r.Condition != nil {
+		condition = r.Condition.String()
+	}
+	return proto.Marshal(&internal.MeasurementNamesRequest{
+		Database:  proto.String(r.Database),
+		Condition: proto.String(condition),
+	})
+}
+
+// UnmarshalBinary decodes data into r.
+func (r *MeasurementNamesRequest) UnmarshalBinary(data []byte) error {
+	var pb internal.MeasurementNamesRequest
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return err
+	}
+
+	r.Database = pb.GetDatabase()
+	if pb.GetCondition() != "" {
+		if condition, err := influxql.ParseExpr(pb.GetCondition()); err != nil {
+			return err
+		} else {
+			r.Condition = condition
+		}
+	}
+	return nil
+}
+
+// MeasurementNamesResponse represents a response from measurement names.
+type MeasurementNamesResponse struct {
+	Names [][]byte
+	Err   error
+}
+
+// MarshalBinary encodes r to a binary format.
+func (r *MeasurementNamesResponse) MarshalBinary() ([]byte, error) {
+	var pb internal.MeasurementNamesResponse
+	pb.Names = r.Names
+	if r.Err != nil {
+		pb.Err = proto.String(r.Err.Error())
+	}
+	return proto.Marshal(&pb)
+}
+
+// UnmarshalBinary decodes data into r.
+func (r *MeasurementNamesResponse) UnmarshalBinary(data []byte) error {
+	var pb internal.MeasurementNamesResponse
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return err
+	}
+	r.Names = pb.GetNames()
+	if pb.Err != nil {
+		r.Err = errors.New(pb.GetErr())
+	}
+	return nil
+}
+
+// TagKeysRequest represents a request to retrieve tag keys.
+type TagKeysRequest struct {
+	ShardIDs  []uint64
+	Condition influxql.Expr
+}
+
+// MarshalBinary encodes r to a binary format.
+func (r *TagKeysRequest) MarshalBinary() ([]byte, error) {
+	var condition string
+	if r.Condition != nil {
+		condition = r.Condition.String()
+	}
+	return proto.Marshal(&internal.TagKeysRequest{
+		ShardIDs:  r.ShardIDs,
+		Condition: proto.String(condition),
+	})
+}
+
+// UnmarshalBinary decodes data into r.
+func (r *TagKeysRequest) UnmarshalBinary(data []byte) error {
+	var pb internal.TagKeysRequest
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return err
+	}
+
+	r.ShardIDs = pb.GetShardIDs()
+	if pb.GetCondition() != "" {
+		if condition, err := influxql.ParseExpr(pb.GetCondition()); err != nil {
+			return err
+		} else {
+			r.Condition = condition
+		}
+	}
+	return nil
+}
+
+// TagKeysResponse represents a response from tag keys.
+type TagKeysResponse struct {
+	TagKeys []tsdb.TagKeys
+	Err     error
+}
+
+// MarshalBinary encodes r to a binary format.
+func (r *TagKeysResponse) MarshalBinary() ([]byte, error) {
+	var pb internal.TagKeysResponse
+	buf, err := json.Marshal(r.TagKeys)
+	if err != nil {
+		return nil, err
+	}
+	pb.TagKeys = buf
+
+	if r.Err != nil {
+		pb.Err = proto.String(r.Err.Error())
+	}
+	return proto.Marshal(&pb)
+}
+
+// UnmarshalBinary decodes data into r.
+func (r *TagKeysResponse) UnmarshalBinary(data []byte) error {
+	var pb internal.TagKeysResponse
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return err
+	}
+
+	err := json.Unmarshal(pb.GetTagKeys(), &r.TagKeys)
+	if err != nil {
+		return err
+	}
+
+	if pb.Err != nil {
+		r.Err = errors.New(pb.GetErr())
+	}
+	return nil
+}
+
+// TagValuesRequest represents a request to retrieve tag values.
+type TagValuesRequest struct {
+	ShardIDs  []uint64
+	Condition influxql.Expr
+}
+
+// MarshalBinary encodes r to a binary format.
+func (r *TagValuesRequest) MarshalBinary() ([]byte, error) {
+	var condition string
+	if r.Condition != nil {
+		condition = r.Condition.String()
+	}
+	return proto.Marshal(&internal.TagValuesRequest{
+		ShardIDs:  r.ShardIDs,
+		Condition: proto.String(condition),
+	})
+}
+
+// UnmarshalBinary decodes data into r.
+func (r *TagValuesRequest) UnmarshalBinary(data []byte) error {
+	var pb internal.TagValuesRequest
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return err
+	}
+
+	r.ShardIDs = pb.GetShardIDs()
+	if pb.GetCondition() != "" {
+		if condition, err := influxql.ParseExpr(pb.GetCondition()); err != nil {
+			return err
+		} else {
+			r.Condition = condition
+		}
+	}
+	return nil
+}
+
+// TagValuesResponse represents a response from tag values.
+type TagValuesResponse struct {
+	TagValues []tsdb.TagValues
+	Err       error
+}
+
+// MarshalBinary encodes r to a binary format.
+func (r *TagValuesResponse) MarshalBinary() ([]byte, error) {
+	var pb internal.TagValuesResponse
+	buf, err := json.Marshal(r.TagValues)
+	if err != nil {
+		return nil, err
+	}
+	pb.TagValues = buf
+
+	if r.Err != nil {
+		pb.Err = proto.String(r.Err.Error())
+	}
+	return proto.Marshal(&pb)
+}
+
+// UnmarshalBinary decodes data into r.
+func (r *TagValuesResponse) UnmarshalBinary(data []byte) error {
+	var pb internal.TagValuesResponse
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return err
+	}
+
+	err := json.Unmarshal(pb.GetTagValues(), &r.TagValues)
+	if err != nil {
+		return err
+	}
+
+	if pb.Err != nil {
+		r.Err = errors.New(pb.GetErr())
+	}
+	return nil
+}
+
+// SeriesCardinalityRequest represents a request to retrieve series cardinality.
+type SeriesCardinalityRequest struct {
+	Database string
+}
+
+// MarshalBinary encodes r to a binary format.
+func (r *SeriesCardinalityRequest) MarshalBinary() ([]byte, error) {
+	return proto.Marshal(&internal.SeriesCardinalityRequest{
+		Database: proto.String(r.Database),
+	})
+}
+
+// UnmarshalBinary decodes data into r.
+func (r *SeriesCardinalityRequest) UnmarshalBinary(data []byte) error {
+	var pb internal.SeriesCardinalityRequest
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return err
+	}
+	r.Database = pb.GetDatabase()
+	return nil
+}
+
+// SeriesCardinalityResponse represents a response from series cardinality.
+type SeriesCardinalityResponse struct {
+	Cardinality int64
+	Err         error
+}
+
+func (r *SeriesCardinalityResponse) MarshalBinary() ([]byte, error) {
+	var pb internal.SeriesCardinalityResponse
+	pb.Cardinality = proto.Int64(r.Cardinality)
+	if r.Err != nil {
+		pb.Err = proto.String(r.Err.Error())
+	}
+	return proto.Marshal(&pb)
+}
+
+func (r *SeriesCardinalityResponse) UnmarshalBinary(data []byte) error {
+	var pb internal.SeriesCardinalityResponse
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return err
+	}
+	r.Cardinality = pb.GetCardinality()
+	if pb.Err != nil {
+		r.Err = errors.New(pb.GetErr())
+	}
+	return nil
+}
+
+// MeasurementsCardinalityRequest represents a request to retrieve measurements cardinality.
+type MeasurementsCardinalityRequest struct {
+	Database string
+}
+
+// MarshalBinary encodes r to a binary format.
+func (r *MeasurementsCardinalityRequest) MarshalBinary() ([]byte, error) {
+	return proto.Marshal(&internal.MeasurementsCardinalityRequest{
+		Database: proto.String(r.Database),
+	})
+}
+
+// UnmarshalBinary decodes data into r.
+func (r *MeasurementsCardinalityRequest) UnmarshalBinary(data []byte) error {
+	var pb internal.MeasurementsCardinalityRequest
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return err
+	}
+	r.Database = pb.GetDatabase()
+	return nil
+}
+
+// MeasurementsCardinalityResponse represents a response from measurements cardinality.
+type MeasurementsCardinalityResponse struct {
+	Cardinality int64
+	Err         error
+}
+
+func (r *MeasurementsCardinalityResponse) MarshalBinary() ([]byte, error) {
+	var pb internal.MeasurementsCardinalityResponse
+	pb.Cardinality = proto.Int64(r.Cardinality)
+	if r.Err != nil {
+		pb.Err = proto.String(r.Err.Error())
+	}
+	return proto.Marshal(&pb)
+}
+
+func (r *MeasurementsCardinalityResponse) UnmarshalBinary(data []byte) error {
+	var pb internal.MeasurementsCardinalityResponse
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return err
+	}
+	r.Cardinality = pb.GetCardinality()
+	if pb.Err != nil {
+		r.Err = errors.New(pb.GetErr())
 	}
 	return nil
 }
@@ -422,7 +695,6 @@ func (r *FieldDimensionsRequest) UnmarshalBinary(data []byte) error {
 	if err := r.Measurement.UnmarshalBinary(pb.GetMeasurement()); err != nil {
 		return err
 	}
-
 	return nil
 }
 
@@ -509,7 +781,6 @@ func (r *MapTypeRequest) UnmarshalBinary(data []byte) error {
 		return err
 	}
 	r.Field = pb.GetField()
-
 	return nil
 }
 
@@ -690,7 +961,6 @@ func (r *CopyShardResponse) UnmarshalBinary(data []byte) error {
 	if err := proto.Unmarshal(data, &pb); err != nil {
 		return err
 	}
-
 	if pb.Err != nil {
 		r.Err = errors.New(pb.GetErr())
 	}
@@ -715,7 +985,6 @@ func (r *RemoveShardRequest) UnmarshalBinary(data []byte) error {
 	if err := proto.Unmarshal(data, &pb); err != nil {
 		return err
 	}
-
 	r.ShardID = pb.GetShardID()
 	return nil
 }
@@ -738,7 +1007,40 @@ func (r *RemoveShardResponse) UnmarshalBinary(data []byte) error {
 	if err := proto.Unmarshal(data, &pb); err != nil {
 		return err
 	}
+	if pb.Err != nil {
+		r.Err = errors.New(pb.GetErr())
+	}
+	return nil
+}
 
+// ShowShardsResponse represents a response to show shards.
+type ShowShardsResponse struct {
+	Shards map[uint64]*meta.ShardOwnerInfo
+	Err    error
+}
+
+func (r *ShowShardsResponse) MarshalBinary() ([]byte, error) {
+	var pb internal.ShowShardsResponse
+	buf, err := json.Marshal(r.Shards)
+	if err != nil {
+		return nil, err
+	}
+	pb.Shards = buf[:]
+	if r.Err != nil {
+		pb.Err = proto.String(r.Err.Error())
+	}
+	return proto.Marshal(&pb)
+}
+
+func (r *ShowShardsResponse) UnmarshalBinary(data []byte) error {
+	var pb internal.ShowShardsResponse
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return err
+	}
+	err := json.Unmarshal(pb.GetShards(), &r.Shards)
+	if err != nil {
+		return err
+	}
 	if pb.Err != nil {
 		r.Err = errors.New(pb.GetErr())
 	}
@@ -765,7 +1067,6 @@ func (r *JoinClusterRequest) UnmarshalBinary(data []byte) error {
 	if err := proto.Unmarshal(data, &pb); err != nil {
 		return err
 	}
-
 	r.MetaServers = pb.GetMetaServers()
 	r.Update = pb.GetUpdate()
 	return nil
@@ -773,11 +1074,17 @@ func (r *JoinClusterRequest) UnmarshalBinary(data []byte) error {
 
 // JoinClusterResponse represents a response to join cluster.
 type JoinClusterResponse struct {
-	Err error
+	Node *meta.NodeInfo
+	Err  error
 }
 
 func (r *JoinClusterResponse) MarshalBinary() ([]byte, error) {
 	var pb internal.JoinClusterResponse
+	pb.Node = &internal.NodeInfo{
+		ID:      proto.Uint64(r.Node.ID),
+		Addr:    proto.String(r.Node.Addr),
+		TCPAddr: proto.String(r.Node.TCPAddr),
+	}
 	if r.Err != nil {
 		pb.Err = proto.String(r.Err.Error())
 	}
@@ -788,6 +1095,13 @@ func (r *JoinClusterResponse) UnmarshalBinary(data []byte) error {
 	var pb internal.JoinClusterResponse
 	if err := proto.Unmarshal(data, &pb); err != nil {
 		return err
+	}
+	if node := pb.GetNode(); node != nil {
+		r.Node = &meta.NodeInfo{
+			ID:      node.GetID(),
+			Addr:    node.GetAddr(),
+			TCPAddr: node.GetTCPAddr(),
+		}
 	}
 	if pb.Err != nil {
 		r.Err = errors.New(pb.GetErr())
@@ -819,128 +1133,245 @@ func (r *LeaveClusterResponse) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-// ReadTLV reads a type-length-value record from r.
-func ReadTLV(r io.Reader) (byte, []byte, error) {
-	typ, err := ReadType(r)
+// RemoveHintedHandoffRequest represents a request to remove a hinted handoff.
+type RemoveHintedHandoffRequest struct {
+	NodeID uint64
+}
+
+// MarshalBinary encodes r to a binary format.
+func (r *RemoveHintedHandoffRequest) MarshalBinary() ([]byte, error) {
+	return proto.Marshal(&internal.RemoveHintedHandoffRequest{
+		NodeID: proto.Uint64(r.NodeID),
+	})
+}
+
+// UnmarshalBinary decodes data into r.
+func (r *RemoveHintedHandoffRequest) UnmarshalBinary(data []byte) error {
+	var pb internal.RemoveHintedHandoffRequest
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return err
+	}
+	r.NodeID = pb.GetNodeID()
+	return nil
+}
+
+// RemoveHintedHandoffResponse represents a response from a hinted handoff remove.
+type RemoveHintedHandoffResponse struct {
+	Err error
+}
+
+func (r *RemoveHintedHandoffResponse) MarshalBinary() ([]byte, error) {
+	var pb internal.RemoveHintedHandoffResponse
+	if r.Err != nil {
+		pb.Err = proto.String(r.Err.Error())
+	}
+	return proto.Marshal(&pb)
+}
+
+func (r *RemoveHintedHandoffResponse) UnmarshalBinary(data []byte) error {
+	var pb internal.RemoveHintedHandoffResponse
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return err
+	}
+	if pb.Err != nil {
+		r.Err = errors.New(pb.GetErr())
+	}
+	return nil
+}
+
+// Client provides an API for the rpc service.
+type Client struct {
+	tlsConfig *tls.Config
+	timeout   time.Duration
+}
+
+// NewClient returns a new *Client.
+func NewClient(tlsConfig *tls.Config, timeout time.Duration) *Client {
+	return &Client{
+		tlsConfig: tlsConfig,
+		timeout:   timeout,
+	}
+}
+
+func (c *Client) dial(address string) (net.Conn, error) {
+	return tcp.DialTLSTimeoutHeader("tcp", address, c.tlsConfig, c.timeout, MuxHeader)
+}
+
+func (c *Client) CopyShard(address, host, database, policy string, shardID uint64, since time.Time) error {
+	conn, err := c.dial(address)
 	if err != nil {
-		return 0, nil, err
-	}
-
-	buf, err := ReadLV(r)
-	if err != nil {
-		return 0, nil, err
-	}
-	return typ, buf, err
-}
-
-// ReadType reads the type from a TLV record.
-func ReadType(r io.Reader) (byte, error) {
-	var typ [1]byte
-	if _, err := io.ReadFull(r, typ[:]); err != nil {
-		return 0, fmt.Errorf("read message type: %s", err)
-	}
-	return typ[0], nil
-}
-
-// ReadLV reads the length-value from a TLV record.
-func ReadLV(r io.Reader) ([]byte, error) {
-	// Read the size of the message.
-	var sz int64
-	if err := binary.Read(r, binary.BigEndian, &sz); err != nil {
-		return nil, fmt.Errorf("read message size: %s", err)
-	}
-
-	if sz >= MaxMessageSize {
-		return nil, fmt.Errorf("max message size of %d exceeded: %d", MaxMessageSize, sz)
-	}
-
-	// Read the value.
-	buf := make([]byte, sz)
-	if _, err := io.ReadFull(r, buf); err != nil {
-		return nil, fmt.Errorf("read message value: %s", err)
-	}
-
-	return buf, nil
-}
-
-// WriteTLV writes a type-length-value record to w.
-func WriteTLV(w io.Writer, typ byte, buf []byte) error {
-	if err := WriteType(w, typ); err != nil {
 		return err
 	}
-	if err := WriteLV(w, buf); err != nil {
-		return err
-	}
-	return nil
-}
+	defer conn.Close()
 
-// WriteType writes the type in a TLV record to w.
-func WriteType(w io.Writer, typ byte) error {
-	if _, err := w.Write([]byte{typ}); err != nil {
-		return fmt.Errorf("write message type: %s", err)
+	// Send request.
+	req := CopyShardRequest{
+		Host:     host,
+		Database: database,
+		Policy:   policy,
+		ShardID:  shardID,
+		Since:    since,
 	}
-	return nil
-}
-
-// WriteLV writes the length-value in a TLV record to w.
-func WriteLV(w io.Writer, buf []byte) error {
-	// Write the size of the message.
-	if err := binary.Write(w, binary.BigEndian, int64(len(buf))); err != nil {
-		return fmt.Errorf("write message size: %s", err)
-	}
-
-	// Write the value.
-	if _, err := w.Write(buf); err != nil {
-		return fmt.Errorf("write message value: %s", err)
-	}
-	return nil
-}
-
-// EncodeTLV encodes v to a binary format and writes the record-length-value record to w.
-func EncodeTLV(w io.Writer, typ byte, v encoding.BinaryMarshaler) error {
-	if err := WriteType(w, typ); err != nil {
-		return err
-	}
-	if err := EncodeLV(w, v); err != nil {
-		return err
-	}
-	return nil
-}
-
-// EncodeLV encodes v to a binary format and writes the length-value record to w.
-func EncodeLV(w io.Writer, v encoding.BinaryMarshaler) error {
-	buf, err := v.MarshalBinary()
+	err = EncodeTLV(conn, copyShardRequestMessage, &req)
 	if err != nil {
 		return err
 	}
 
-	if err := WriteLV(w, buf); err != nil {
-		return err
-	}
-	return nil
-}
-
-// DecodeTLV reads the type-length-value record from r and unmarshals it into v.
-func DecodeTLV(r io.Reader, v encoding.BinaryUnmarshaler) (typ byte, err error) {
-	typ, err = ReadType(r)
-	if err != nil {
-		return 0, err
-	}
-	if err := DecodeLV(r, v); err != nil {
-		return 0, err
-	}
-	return typ, nil
-}
-
-// DecodeLV reads the length-value record from r and unmarshals it into v.
-func DecodeLV(r io.Reader, v encoding.BinaryUnmarshaler) error {
-	buf, err := ReadLV(r)
+	// Read the response.
+	_, buf, err := ReadTLV(conn)
 	if err != nil {
 		return err
 	}
 
-	if err := v.UnmarshalBinary(buf); err != nil {
+	// Unmarshal response.
+	var resp CopyShardResponse
+	if err = resp.UnmarshalBinary(buf); err != nil {
 		return err
 	}
-	return nil
+	return resp.Err
+}
+
+func (c *Client) RemoveShard(address string, shardID uint64) error {
+	conn, err := c.dial(address)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	// Send request.
+	req := RemoveShardRequest{
+		ShardID: shardID,
+	}
+	err = EncodeTLV(conn, removeShardRequestMessage, &req)
+	if err != nil {
+		return err
+	}
+
+	// Read the response.
+	_, buf, err := ReadTLV(conn)
+	if err != nil {
+		return err
+	}
+
+	// Unmarshal response.
+	var resp RemoveShardResponse
+	if err = resp.UnmarshalBinary(buf); err != nil {
+		return err
+	}
+	return resp.Err
+}
+
+func (c *Client) ShowShards(address string) (map[uint64]*meta.ShardOwnerInfo, error) {
+	conn, err := c.dial(address)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	// Send request.
+	err = WriteType(conn, showShardsRequestMessage)
+	if err != nil {
+		return nil, err
+	}
+
+	// Read the response.
+	_, buf, err := ReadTLV(conn)
+	if err != nil {
+		return nil, err
+	}
+
+	// Unmarshal response.
+	var resp ShowShardsResponse
+	if err = resp.UnmarshalBinary(buf); err != nil {
+		return nil, err
+	}
+	return resp.Shards, resp.Err
+}
+
+func (c *Client) JoinCluster(address string, metaServers []string, update bool) (*meta.NodeInfo, error) {
+	conn, err := c.dial(address)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	// Send request.
+	req := JoinClusterRequest{
+		MetaServers: metaServers,
+		Update:      update,
+	}
+	err = EncodeTLV(conn, joinClusterRequestMessage, &req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Read the response.
+	_, buf, err := ReadTLV(conn)
+	if err != nil {
+		return nil, err
+	}
+
+	// Unmarshal response.
+	var resp JoinClusterResponse
+	if err = resp.UnmarshalBinary(buf); err != nil {
+		return nil, err
+	}
+	return resp.Node, resp.Err
+}
+
+func (c *Client) LeaveCluster(address string) error {
+	conn, err := c.dial(address)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	// Send request.
+	err = WriteType(conn, leaveClusterRequestMessage)
+	if err != nil {
+		return err
+	}
+
+	// Read the response.
+	_, buf, err := ReadTLV(conn)
+	if err != nil {
+		return err
+	}
+
+	// Unmarshal response.
+	var resp LeaveClusterResponse
+	if err = resp.UnmarshalBinary(buf); err != nil {
+		return err
+	}
+	return resp.Err
+}
+
+func (c *Client) RemoveHintedHandoff(address string, nodeID uint64) error {
+	conn, err := c.dial(address)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	// Send request.
+	req := RemoveHintedHandoffRequest{
+		NodeID: nodeID,
+	}
+	err = EncodeTLV(conn, removeHintedHandoffRequestMessage, &req)
+	if err != nil {
+		return err
+	}
+
+	// Read the response.
+	_, buf, err := ReadTLV(conn)
+	if err != nil {
+		return err
+	}
+
+	// Unmarshal response.
+	var resp RemoveHintedHandoffResponse
+	if err = resp.UnmarshalBinary(buf); err != nil {
+		return err
+	}
+	return resp.Err
 }

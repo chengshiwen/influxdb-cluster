@@ -18,7 +18,7 @@ require (
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/snappy v0.0.0-20180518054509-2e65f85255db
 	github.com/google/go-cmp v0.4.0
-	github.com/hashicorp/raft v1.3.7
+	github.com/hashicorp/raft v1.3.10
 	github.com/hashicorp/raft-boltdb/v2 v2.2.2
 	github.com/influxdata/flux v0.65.1
 	github.com/influxdata/influxql v1.1.1-0.20200828144457-65d3ef77d385
@@ -59,4 +59,4 @@ require (
 	gopkg.in/fatih/pool.v2 v2.0.0
 )
 
-replace github.com/influxdata/influxql => github.com/chengshiwen/influxql v1.1.1-0.20220415184439-726dc89e0d7b
+replace github.com/influxdata/influxql => github.com/influxtsdb/influxql v1.1.1-0.20220918111639-aa1802d18d78

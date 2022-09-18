@@ -136,6 +136,20 @@ var (
 	// ErrUsernameRequired is returned when creating a user without a username.
 	ErrUsernameRequired = errors.New("username required")
 
+	// ErrPasswordRequired is returned when creating a user without a password.
+	ErrPasswordRequired = errors.New("password or hash required")
+
 	// ErrAuthenticate is returned when authentication fails.
 	ErrAuthenticate = errors.New("authentication failed")
+)
+
+var (
+	// ErrRoleExists is returned when creating an already existing role.
+	ErrRoleExists = errors.New("role already exists")
+
+	// ErrRoleNotFound is returned when mutating a role that doesn't exist.
+	ErrRoleNotFound = errors.New("role not found")
+
+	// ErrRoleNameRequired is returned when creating a role without a role name.
+	ErrRoleNameRequired = errors.New("role name required")
 )

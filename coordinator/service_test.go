@@ -14,6 +14,24 @@ import (
 	"github.com/influxdata/influxdb/tcp"
 )
 
+type server struct{}
+
+func (s *server) Reset() error {
+	return nil
+}
+
+func (s *server) HTTPAddr() string {
+	return "127.0.0.1:8086"
+}
+
+func (s *server) HTTPScheme() string {
+	return "http"
+}
+
+func (s *server) TCPAddr() string {
+	return "127.0.0.1:8088"
+}
+
 type metaClient struct {
 	addr string
 }
@@ -51,10 +69,6 @@ func (m *metaClient) DataNodeByTCPAddr(tcpAddr string) (*meta.NodeInfo, error) {
 
 func (m *metaClient) Status() (*meta.MetaNodeStatus, error) {
 	return nil, nil
-}
-
-func (m *metaClient) RemoteAddr(addr string) string {
-	return meta.RemoteAddr(meta.DefaultHostname, addr)
 }
 
 func (m *metaClient) Save() error {
@@ -164,6 +178,7 @@ func NewService() *Service {
 		Service: coordinator.NewService(coordinator.Config{}),
 	}
 	s.Service.TSDBStore = &s.TSDBStore
+	s.Service.Server = &server{}
 	return s
 }
 

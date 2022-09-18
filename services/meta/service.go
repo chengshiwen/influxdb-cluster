@@ -3,6 +3,7 @@ package meta // import "github.com/influxdata/influxdb/services/meta"
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -10,17 +11,18 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hashicorp/raft"
 	"go.uber.org/zap"
 )
 
-const (
-	MuxHeader = 8
-)
+// MuxHeader is the header byte used for the TCP muxer.
+const MuxHeader = 8
 
 type Service struct {
 	RaftListener net.Listener
 
-	Version string
+	RPCClient RPCClient
+	Version   string
 
 	mu        sync.RWMutex
 	config    *Config
@@ -64,6 +66,10 @@ func NewService(c *Config) *Service {
 func (s *Service) Open() error {
 	s.Logger.Info("Starting meta service")
 
+	if s.config.AuthEnabled && s.config.InternalSharedSecret == "" {
+		return errors.New("internal-shared-secret is blank and must be set in config when auth is enabled")
+	}
+
 	if s.RaftListener == nil {
 		panic("no raft listener set")
 	}
@@ -97,7 +103,7 @@ func (s *Service) Open() error {
 		zap.Bool("https", s.https))
 
 	// wait for the listeners to start
-	timeout := time.Now().Add(raftListenerStartupTimeout)
+	timeout := time.Now().Add(time.Second)
 	for {
 		if s.ln.Addr() != nil && s.RaftListener.Addr() != nil {
 			break
@@ -121,7 +127,7 @@ func (s *Service) Open() error {
 	}
 
 	// Open the store.  The addresses passed in are remotely accessible.
-	s.store = newStore(s.config, s.remoteAddr(s.httpAddr), s.remoteAddr(s.raftAddr))
+	s.store = newStore(s.config, s.HTTPAddr(), s.RaftAddr())
 	s.store.WithLogger(s.Logger)
 
 	handler := newHandler(s.config, s)
@@ -136,11 +142,9 @@ func (s *Service) Open() error {
 		return err
 	}
 
-	return nil
-}
+	go s.handler.announce()
 
-func (s *Service) remoteAddr(addr string) string {
-	return RemoteAddr(s.config.RemoteHostname, addr)
+	return nil
 }
 
 // serve serves the handler from the listener.
@@ -169,17 +173,39 @@ func (s *Service) Close() error {
 		}
 	}
 
+	if s.RaftListener != nil {
+		if err := s.RaftListener.Close(); err != nil {
+			return err
+		}
+	}
+
 	return nil
+}
+
+// State returns the state of this raft peer.
+func (s *Service) State() raft.RaftState {
+	if s.store == nil {
+		return raft.Shutdown
+	}
+	return s.store.state()
 }
 
 // HTTPAddr returns the bind address for the HTTP API
 func (s *Service) HTTPAddr() string {
-	return s.httpAddr
+	return RemoteAddr(s.config.RemoteHostname, s.httpAddr)
+}
+
+// HTTPScheme returns the HTTP scheme to specify if we should use a TLS connection.
+func (s *Service) HTTPScheme() string {
+	if s.https {
+		return "https"
+	}
+	return "http"
 }
 
 // RaftAddr returns the bind address for the Raft TCP listener
 func (s *Service) RaftAddr() string {
-	return s.raftAddr
+	return RemoteAddr(s.config.RemoteHostname, s.raftAddr)
 }
 
 func (s *Service) NodeID() uint64 {

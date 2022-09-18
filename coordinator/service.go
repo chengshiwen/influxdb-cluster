@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -14,18 +16,21 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/influxdata/influxdb/coordinator/rpc"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/monitor"
 	"github.com/influxdata/influxdb/query"
 	"github.com/influxdata/influxdb/services/meta"
+	"github.com/influxdata/influxdb/tcp"
 	"github.com/influxdata/influxdb/tsdb"
 	"github.com/influxdata/influxql"
 	"go.uber.org/zap"
 )
 
-// MuxHeader is the header byte used in the TCP mux.
-const MuxHeader = rpc.MuxHeader
+// MaxMessageSize defines how large a message can be before we reject it
+const MaxMessageSize = 1024 * 1024 * 1024 // 1GB
+
+// MuxHeader is the header byte used for the TCP muxer.
+const MuxHeader = 2
 
 // Statistics maintained by the coordinator package
 const (
@@ -40,8 +45,66 @@ const (
 	statBackupShardReq      = "backupShardReq"
 	statCopyShardReq        = "copyShardReq"
 	statRemoveShardReq      = "removeShardReq"
-	statJoinClusterReq      = "joinClusterReq"
-	statLeaveClusterReq     = "leaveClusterReq"
+	statShowShardsReq       = "showShardsReq"
+)
+
+const (
+	writeShardRequestMessage byte = iota + 1
+	writeShardResponseMessage
+
+	executeStatementRequestMessage
+	executeStatementResponseMessage
+
+	measurementNamesRequestMessage
+	measurementNamesResponseMessage
+
+	tagKeysRequestMessage
+	tagKeysResponseMessage
+
+	tagValuesRequestMessage
+	tagValuesResponseMessage
+
+	seriesCardinalityRequestMessage
+	seriesCardinalityResponseMessage
+
+	measurementsCardinalityRequestMessage
+	measurementsCardinalityResponseMessage
+
+	createIteratorRequestMessage
+	createIteratorResponseMessage
+
+	iteratorCostRequestMessage
+	iteratorCostResponseMessage
+
+	fieldDimensionsRequestMessage
+	fieldDimensionsResponseMessage
+
+	mapTypeRequestMessage
+	mapTypeResponseMessage
+
+	expandSourcesRequestMessage
+	expandSourcesResponseMessage
+
+	backupShardRequestMessage
+	backupShardResponseMessage
+
+	copyShardRequestMessage
+	copyShardResponseMessage
+
+	removeShardRequestMessage
+	removeShardResponseMessage
+
+	showShardsRequestMessage
+	showShardsResponseMessage
+
+	joinClusterRequestMessage
+	joinClusterResponseMessage
+
+	leaveClusterRequestMessage
+	leaveClusterResponseMessage
+
+	removeHintedHandoffRequestMessage
+	removeHintedHandoffResponseMessage
 )
 
 // BackupTimeout is the time before a connection times out when performing a backup.
@@ -59,8 +122,11 @@ type Service struct {
 	DefaultListener net.Listener
 	httpListener    *chanListener // http channel-based listener
 
-	HTTPDService interface {
-		Addr() net.Addr
+	Server interface {
+		Reset() error
+		HTTPAddr() string
+		HTTPScheme() string
+		TCPAddr() string
 	}
 
 	MetaClient interface {
@@ -71,8 +137,11 @@ type Service struct {
 		CreateDataNode(httpAddr, tcpAddr string) (*meta.NodeInfo, error)
 		DataNodeByTCPAddr(tcpAddr string) (*meta.NodeInfo, error)
 		Status() (*meta.MetaNodeStatus, error)
-		RemoteAddr(addr string) string
 		Save() error
+	}
+
+	HintedHandoff interface {
+		RemoveNode(ownerID uint64) error
 	}
 
 	TSDBStore TSDBStore
@@ -96,8 +165,22 @@ func NewService(c Config) *Service {
 func (s *Service) Open() error {
 	s.Logger.Info("Starting coordinator service")
 
-	if err := s.openHTTPListener(); err != nil {
-		return err
+	// wait for the listeners to start
+	timeout := time.Now().Add(time.Second)
+	for {
+		if s.Listener.Addr() != nil && s.DefaultListener.Addr() != nil {
+			break
+		}
+
+		if time.Now().After(timeout) {
+			return fmt.Errorf("unable to open without coordinator listener running")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	s.httpListener = newChanListener(s.DefaultListener.Addr())
+
+	if !s.config.ClusterTracing {
+		s.Logger = zap.NewNop()
 	}
 
 	// Begin serving connections.
@@ -110,9 +193,7 @@ func (s *Service) Open() error {
 
 // WithLogger sets the logger on the service.
 func (s *Service) WithLogger(log *zap.Logger) {
-	if s.config.ClusterTracing {
-		s.Logger = log.With(zap.String("service", "coordinator"))
-	}
+	s.Logger = log.With(zap.String("service", "coordinator"))
 }
 
 // Statistics maintains the statistics for the coordinator service.
@@ -128,8 +209,7 @@ type Statistics struct {
 	BackupShardReq      int64
 	CopyShardReq        int64
 	RemoveShardReq      int64
-	JoinClusterReq      int64
-	LeaveClusterReq     int64
+	ShowShardsReq       int64
 }
 
 // Statistics returns statistics for periodic monitoring.
@@ -149,8 +229,7 @@ func (s *Service) Statistics(tags map[string]string) []models.Statistic {
 			statBackupShardReq:      atomic.LoadInt64(&s.stats.BackupShardReq),
 			statCopyShardReq:        atomic.LoadInt64(&s.stats.CopyShardReq),
 			statRemoveShardReq:      atomic.LoadInt64(&s.stats.RemoveShardReq),
-			statJoinClusterReq:      atomic.LoadInt64(&s.stats.JoinClusterReq),
-			statLeaveClusterReq:     atomic.LoadInt64(&s.stats.LeaveClusterReq),
+			statShowShardsReq:       atomic.LoadInt64(&s.stats.ShowShardsReq),
 		},
 	}}
 }
@@ -225,9 +304,9 @@ func (s *Service) handleConn(conn net.Conn) {
 	}()
 	for {
 		// Read type-length-value.
-		typ, err := rpc.ReadType(conn)
+		typ, err := ReadType(conn)
 		if err != nil {
-			if strings.HasSuffix(err.Error(), "EOF") {
+			if strings.HasSuffix(err.Error(), "EOF") || strings.Contains(err.Error(), "use of closed network connection") {
 				return
 			}
 			s.Logger.Error("Unable to read type", zap.Error(err))
@@ -236,8 +315,8 @@ func (s *Service) handleConn(conn net.Conn) {
 
 		// Delegate message processing by type.
 		switch typ {
-		case rpc.WriteShardRequestMessage:
-			buf, err := rpc.ReadLV(conn)
+		case writeShardRequestMessage:
+			buf, err := ReadLV(conn)
 			if err != nil {
 				s.Logger.Error("Unable to read length-value", zap.Error(err))
 				return
@@ -248,8 +327,8 @@ func (s *Service) handleConn(conn net.Conn) {
 				s.Logger.Error("Process write shard error", zap.Error(err))
 			}
 			s.writeShardResponse(conn, err)
-		case rpc.ExecuteStatementRequestMessage:
-			buf, err := rpc.ReadLV(conn)
+		case executeStatementRequestMessage:
+			buf, err := ReadLV(conn)
 			if err != nil {
 				s.Logger.Error("Unable to read length-value", zap.Error(err))
 				return
@@ -259,45 +338,65 @@ func (s *Service) handleConn(conn net.Conn) {
 				s.Logger.Error("Process execute statement error", zap.Error(err))
 			}
 			s.executeStatementResponse(conn, err)
-		case rpc.CreateIteratorRequestMessage:
+		case measurementNamesRequestMessage:
+			s.processMeasurementNamesRequest(conn)
+			return
+		case tagKeysRequestMessage:
+			s.processTagKeysRequest(conn)
+			return
+		case tagValuesRequestMessage:
+			s.processTagValuesRequest(conn)
+			return
+		case seriesCardinalityRequestMessage:
+			s.processSeriesCardinalityRequest(conn)
+			return
+		case measurementsCardinalityRequestMessage:
+			s.processMeasurementsCardinalityRequest(conn)
+			return
+		case createIteratorRequestMessage:
 			atomic.AddInt64(&s.stats.CreateIteratorReq, 1)
 			s.processCreateIteratorRequest(conn)
 			return
-		case rpc.IteratorCostRequestMessage:
+		case iteratorCostRequestMessage:
 			atomic.AddInt64(&s.stats.IteratorCostReq, 1)
 			s.processIteratorCostRequest(conn)
 			return
-		case rpc.FieldDimensionsRequestMessage:
+		case fieldDimensionsRequestMessage:
 			atomic.AddInt64(&s.stats.FieldDimensionsReq, 1)
 			s.processFieldDimensionsRequest(conn)
 			return
-		case rpc.MapTypeRequestMessage:
+		case mapTypeRequestMessage:
 			atomic.AddInt64(&s.stats.MapTypeReq, 1)
 			s.processMapTypeRequest(conn)
 			return
-		case rpc.ExpandSourcesRequestMessage:
+		case expandSourcesRequestMessage:
 			atomic.AddInt64(&s.stats.ExpandSourcesReq, 1)
 			s.processExpandSourcesRequest(conn)
 			return
-		case rpc.BackupShardRequestMessage:
+		case backupShardRequestMessage:
 			atomic.AddInt64(&s.stats.BackupShardReq, 1)
 			s.processBackupShardRequest(conn)
 			return
-		case rpc.CopyShardRequestMessage:
+		case copyShardRequestMessage:
 			atomic.AddInt64(&s.stats.CopyShardReq, 1)
 			s.processCopyShardRequest(conn)
 			return
-		case rpc.RemoveShardRequestMessage:
+		case removeShardRequestMessage:
 			atomic.AddInt64(&s.stats.RemoveShardReq, 1)
 			s.processRemoveShardRequest(conn)
 			return
-		case rpc.JoinClusterRequestMessage:
-			atomic.AddInt64(&s.stats.JoinClusterReq, 1)
+		case showShardsRequestMessage:
+			atomic.AddInt64(&s.stats.ShowShardsReq, 1)
+			s.processShowShardsRequest(conn)
+			return
+		case joinClusterRequestMessage:
 			s.processJoinClusterRequest(conn)
 			return
-		case rpc.LeaveClusterRequestMessage:
-			atomic.AddInt64(&s.stats.LeaveClusterReq, 1)
+		case leaveClusterRequestMessage:
 			s.processLeaveClusterRequest(conn)
+			return
+		case removeHintedHandoffRequestMessage:
+			s.processRemoveHintedHandoffRequest(conn)
 			return
 		default:
 			s.Logger.Warn("Coordinator service message type not found", zap.Uint8("Type", typ))
@@ -307,7 +406,7 @@ func (s *Service) handleConn(conn net.Conn) {
 
 func (s *Service) processExecuteStatementRequest(buf []byte) error {
 	// Unmarshal the request.
-	var req rpc.ExecuteStatementRequest
+	var req ExecuteStatementRequest
 	if err := req.UnmarshalBinary(buf); err != nil {
 		return err
 	}
@@ -342,7 +441,7 @@ func (s *Service) executeStatement(stmt influxql.Statement, database string) err
 
 func (s *Service) executeStatementResponse(w io.Writer, e error) {
 	// Build response.
-	var resp rpc.ExecuteStatementResponse
+	var resp ExecuteStatementResponse
 	if e != nil {
 		resp.SetCode(1)
 		resp.SetMessage(e.Error())
@@ -358,14 +457,14 @@ func (s *Service) executeStatementResponse(w io.Writer, e error) {
 	}
 
 	// Write to connection.
-	if err := rpc.WriteTLV(w, rpc.ExecuteStatementResponseMessage, buf); err != nil {
+	if err := WriteTLV(w, executeStatementResponseMessage, buf); err != nil {
 		s.Logger.Error("Error writing ExecuteStatement response", zap.Error(err))
 	}
 }
 
 func (s *Service) processWriteShardRequest(buf []byte) error {
 	// Build request
-	var req rpc.WriteShardRequest
+	var req WriteShardRequest
 	if err := req.UnmarshalBinary(buf); err != nil {
 		return err
 	}
@@ -409,7 +508,7 @@ func (s *Service) processWriteShardRequest(buf []byte) error {
 
 func (s *Service) writeShardResponse(w io.Writer, e error) {
 	// Build response.
-	var resp rpc.WriteShardResponse
+	var resp WriteShardResponse
 	if e != nil {
 		resp.SetCode(1)
 		resp.SetMessage(e.Error())
@@ -425,32 +524,153 @@ func (s *Service) writeShardResponse(w io.Writer, e error) {
 	}
 
 	// Write to connection.
-	if err := rpc.WriteTLV(w, rpc.WriteShardResponseMessage, buf); err != nil {
+	if err := WriteTLV(w, writeShardResponseMessage, buf); err != nil {
 		s.Logger.Error("Error writing WriteShard response", zap.Error(err))
 	}
 }
 
-func (s *Service) processCreateIteratorRequest(conn net.Conn) {
-	var itr query.Iterator
-	if err := func() error {
+func (s *Service) processMeasurementNamesRequest(conn net.Conn) {
+	names, err := func() ([][]byte, error) {
 		// Parse request.
-		var req rpc.CreateIteratorRequest
-		if err := rpc.DecodeLV(conn, &req); err != nil {
-			return err
+		var req MeasurementNamesRequest
+		if err := DecodeLV(conn, &req); err != nil {
+			return nil, err
+		}
+		// Return measurement names.
+		return s.TSDBStore.MeasurementNames(context.Background(), nil, req.Database, req.Condition)
+	}()
+	if err != nil {
+		s.Logger.Error("Error reading MeasurementNames request", zap.Error(err))
+		EncodeTLV(conn, measurementNamesResponseMessage, &MeasurementNamesResponse{Err: err})
+		return
+	}
+
+	// Encode success response.
+	if err := EncodeTLV(conn, measurementNamesResponseMessage, &MeasurementNamesResponse{
+		Names: names,
+	}); err != nil {
+		s.Logger.Error("Error writing MeasurementNames response", zap.Error(err))
+		return
+	}
+}
+
+func (s *Service) processTagKeysRequest(conn net.Conn) {
+	tagKeys, err := func() ([]tsdb.TagKeys, error) {
+		// Parse request.
+		var req TagKeysRequest
+		if err := DecodeLV(conn, &req); err != nil {
+			return nil, err
+		}
+		// Return tag keys.
+		return s.TSDBStore.TagKeys(context.Background(), nil, req.ShardIDs, req.Condition)
+	}()
+	if err != nil {
+		s.Logger.Error("Error reading TagKeys request", zap.Error(err))
+		EncodeTLV(conn, tagKeysResponseMessage, &TagKeysResponse{Err: err})
+		return
+	}
+
+	// Encode success response.
+	if err := EncodeTLV(conn, tagKeysResponseMessage, &TagKeysResponse{
+		TagKeys: tagKeys,
+	}); err != nil {
+		s.Logger.Error("Error writing TagKeys response", zap.Error(err))
+		return
+	}
+}
+
+func (s *Service) processTagValuesRequest(conn net.Conn) {
+	tagValues, err := func() ([]tsdb.TagValues, error) {
+		// Parse request.
+		var req TagValuesRequest
+		if err := DecodeLV(conn, &req); err != nil {
+			return nil, err
+		}
+		// Return tag values.
+		return s.TSDBStore.TagValues(context.Background(), nil, req.ShardIDs, req.Condition)
+	}()
+	if err != nil {
+		s.Logger.Error("Error reading TagValues request", zap.Error(err))
+		EncodeTLV(conn, tagValuesResponseMessage, &TagValuesResponse{Err: err})
+		return
+	}
+
+	// Encode success response.
+	if err := EncodeTLV(conn, tagValuesResponseMessage, &TagValuesResponse{
+		TagValues: tagValues,
+	}); err != nil {
+		s.Logger.Error("Error writing TagValues response", zap.Error(err))
+		return
+	}
+}
+
+func (s *Service) processSeriesCardinalityRequest(conn net.Conn) {
+	cardinality, err := func() (int64, error) {
+		// Parse request.
+		var req SeriesCardinalityRequest
+		if err := DecodeLV(conn, &req); err != nil {
+			return 0, err
+		}
+		// Return series cardinality.
+		return s.TSDBStore.SeriesCardinality(context.Background(), req.Database)
+	}()
+	if err != nil {
+		s.Logger.Error("Error reading SeriesCardinality request", zap.Error(err))
+		EncodeTLV(conn, seriesCardinalityResponseMessage, &SeriesCardinalityResponse{Err: err})
+		return
+	}
+
+	// Encode success response.
+	if err := EncodeTLV(conn, seriesCardinalityResponseMessage, &SeriesCardinalityResponse{
+		Cardinality: cardinality,
+	}); err != nil {
+		s.Logger.Error("Error writing SeriesCardinality response", zap.Error(err))
+		return
+	}
+}
+
+func (s *Service) processMeasurementsCardinalityRequest(conn net.Conn) {
+	cardinality, err := func() (int64, error) {
+		// Parse request.
+		var req MeasurementsCardinalityRequest
+		if err := DecodeLV(conn, &req); err != nil {
+			return 0, err
+		}
+		// Return measurements cardinality.
+		return s.TSDBStore.MeasurementsCardinality(context.Background(), req.Database)
+	}()
+	if err != nil {
+		s.Logger.Error("Error reading MeasurementsCardinality request", zap.Error(err))
+		EncodeTLV(conn, measurementsCardinalityResponseMessage, &MeasurementsCardinalityResponse{Err: err})
+		return
+	}
+
+	// Encode success response.
+	if err := EncodeTLV(conn, measurementsCardinalityResponseMessage, &MeasurementsCardinalityResponse{
+		Cardinality: cardinality,
+	}); err != nil {
+		s.Logger.Error("Error writing MeasurementsCardinality response", zap.Error(err))
+		return
+	}
+}
+
+func (s *Service) processCreateIteratorRequest(conn net.Conn) {
+	itr, err := func() (query.Iterator, error) {
+		// Parse request.
+		var req CreateIteratorRequest
+		if err := DecodeLV(conn, &req); err != nil {
+			return nil, err
 		}
 
 		// Collect a shard group with a list of shards for each shard.
 		sg := s.TSDBStore.ShardGroup(req.ShardIDs)
 		if sg == nil {
-			return nil
+			return nil, nil
 		}
 
-		var i query.Iterator
-		var err error
+		// Generate a single iterator from all shards.
 		ctx := context.Background()
 		m := &req.Measurement
-
-		// Generate a single iterator from all shards.
 		if m.Regex != nil {
 			measurements := sg.MeasurementsByRegex(m.Regex.Val)
 			inputs := make([]query.Iterator, 0, len(measurements))
@@ -464,35 +684,32 @@ func (s *Service) processCreateIteratorRequest(conn net.Conn) {
 					if err != nil {
 						return err
 					}
-					inputs = append(inputs, input)
+					if input != nil {
+						inputs = append(inputs, input)
+					}
 				}
 				return nil
 			}(); err != nil {
 				query.Iterators(inputs).Close()
-				return err
+				return nil, err
 			}
 
-			i, err = query.Iterators(inputs).Merge(req.Opt)
-		} else {
-			i, err = sg.CreateIterator(ctx, m, req.Opt)
+			return query.Iterators(inputs).Merge(req.Opt)
 		}
-
-		if err != nil {
-			return err
-		}
-		itr = i
-
-		return nil
-	}(); err != nil {
+		return sg.CreateIterator(ctx, m, req.Opt)
+	}()
+	defer func() {
 		if itr != nil {
 			itr.Close()
 		}
+	}()
+	if err != nil {
 		s.Logger.Error("Error reading CreateIterator request", zap.Error(err))
-		rpc.EncodeTLV(conn, rpc.CreateIteratorResponseMessage, &rpc.CreateIteratorResponse{Err: err})
+		EncodeTLV(conn, createIteratorResponseMessage, &CreateIteratorResponse{Err: err})
 		return
 	}
 
-	resp := rpc.CreateIteratorResponse{}
+	resp := CreateIteratorResponse{}
 	if itr != nil {
 		switch itr.(type) {
 		case query.FloatIterator:
@@ -508,7 +725,7 @@ func (s *Service) processCreateIteratorRequest(conn net.Conn) {
 	}
 
 	// Encode success response.
-	if err := rpc.EncodeTLV(conn, rpc.CreateIteratorResponseMessage, &resp); err != nil {
+	if err := EncodeTLV(conn, createIteratorResponseMessage, &resp); err != nil {
 		s.Logger.Error("Error writing CreateIterator response", zap.Error(err))
 		return
 	}
@@ -526,50 +743,43 @@ func (s *Service) processCreateIteratorRequest(conn net.Conn) {
 }
 
 func (s *Service) processIteratorCostRequest(conn net.Conn) {
-	var cost query.IteratorCost
-	if err := func() error {
+	cost, err := func() (query.IteratorCost, error) {
 		// Parse request.
-		var req rpc.IteratorCostRequest
-		if err := rpc.DecodeLV(conn, &req); err != nil {
-			return err
+		var req IteratorCostRequest
+		if err := DecodeLV(conn, &req); err != nil {
+			return query.IteratorCost{}, err
 		}
 
 		// Collect a shard group with a list of shards for each shard.
 		sg := s.TSDBStore.ShardGroup(req.ShardIDs)
 		if sg == nil {
-			return nil
+			return query.IteratorCost{}, nil
 		}
 
 		// Calculate iterator cost from all shards.
-		if req.Measurement.Regex != nil {
+		m := &req.Measurement
+		if m.Regex != nil {
 			var costs query.IteratorCost
-			measurements := sg.MeasurementsByRegex(req.Measurement.Regex.Val)
+			measurements := sg.MeasurementsByRegex(m.Regex.Val)
 			for _, measurement := range measurements {
-				ic, err := sg.IteratorCost(measurement, req.Opt)
+				cost, err := sg.IteratorCost(measurement, req.Opt)
 				if err != nil {
-					return err
+					return query.IteratorCost{}, err
 				}
-				costs = costs.Combine(ic)
+				costs = costs.Combine(cost)
 			}
-			cost = costs
-			return nil
+			return costs, nil
 		}
-
-		ic, err := sg.IteratorCost(req.Measurement.Name, req.Opt)
-		if err != nil {
-			return err
-		}
-		cost = ic
-
-		return nil
-	}(); err != nil {
+		return sg.IteratorCost(m.Name, req.Opt)
+	}()
+	if err != nil {
 		s.Logger.Error("Error reading IteratorCost request", zap.Error(err))
-		rpc.EncodeTLV(conn, rpc.IteratorCostResponseMessage, &rpc.IteratorCostResponse{Err: err})
+		EncodeTLV(conn, iteratorCostResponseMessage, &IteratorCostResponse{Err: err})
 		return
 	}
 
 	// Encode success response.
-	if err := rpc.EncodeTLV(conn, rpc.IteratorCostResponseMessage, &rpc.IteratorCostResponse{
+	if err := EncodeTLV(conn, iteratorCostResponseMessage, &IteratorCostResponse{
 		Cost: cost,
 	}); err != nil {
 		s.Logger.Error("Error writing IteratorCost response", zap.Error(err))
@@ -578,44 +788,51 @@ func (s *Service) processIteratorCostRequest(conn net.Conn) {
 }
 
 func (s *Service) processFieldDimensionsRequest(conn net.Conn) {
-	var fields map[string]influxql.DataType
-	var dimensions map[string]struct{}
-	if err := func() error {
+	fields, dimensions, err := func() (map[string]influxql.DataType, map[string]struct{}, error) {
 		// Parse request.
-		var req rpc.FieldDimensionsRequest
-		if err := rpc.DecodeLV(conn, &req); err != nil {
-			return err
+		var req FieldDimensionsRequest
+		if err := DecodeLV(conn, &req); err != nil {
+			return nil, nil, err
 		}
 
 		// Collect a shard group with a list of shards for each shard.
 		sg := s.TSDBStore.ShardGroup(req.ShardIDs)
 		if sg == nil {
-			return nil
+			return nil, nil, nil
 		}
 
+		fields := make(map[string]influxql.DataType)
+		dimensions := make(map[string]struct{})
+
 		// Calculate fields, dimensions from all shards.
+		m := &req.Measurement
 		var measurements []string
-		if req.Measurement.Regex != nil {
-			measurements = sg.MeasurementsByRegex(req.Measurement.Regex.Val)
+		if m.Regex != nil {
+			measurements = sg.MeasurementsByRegex(m.Regex.Val)
 		} else {
-			measurements = []string{req.Measurement.Name}
+			measurements = []string{m.Name}
 		}
 
 		f, d, err := sg.FieldDimensions(measurements)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
-		fields, dimensions = f, d
-
-		return nil
-	}(); err != nil {
+		for k, typ := range f {
+			fields[k] = typ
+		}
+		for k := range d {
+			dimensions[k] = struct{}{}
+		}
+		return fields, dimensions, nil
+	}()
+	if err != nil {
 		s.Logger.Error("Error reading FieldDimensions request", zap.Error(err))
-		rpc.EncodeTLV(conn, rpc.FieldDimensionsResponseMessage, &rpc.FieldDimensionsResponse{Err: err})
+		EncodeTLV(conn, fieldDimensionsResponseMessage, &FieldDimensionsResponse{Err: err})
 		return
 	}
 
 	// Encode success response.
-	if err := rpc.EncodeTLV(conn, rpc.FieldDimensionsResponseMessage, &rpc.FieldDimensionsResponse{
+	if err := EncodeTLV(conn, fieldDimensionsResponseMessage, &FieldDimensionsResponse{
 		Fields:     fields,
 		Dimensions: dimensions,
 	}); err != nil {
@@ -625,48 +842,48 @@ func (s *Service) processFieldDimensionsRequest(conn net.Conn) {
 }
 
 func (s *Service) processMapTypeRequest(conn net.Conn) {
-	var typ influxql.DataType
-	if err := func() error {
+	typ, err := func() (influxql.DataType, error) {
 		// Parse request.
-		var req rpc.MapTypeRequest
-		if err := rpc.DecodeLV(conn, &req); err != nil {
-			return err
+		var req MapTypeRequest
+		if err := DecodeLV(conn, &req); err != nil {
+			return influxql.Unknown, err
 		}
 
 		// Collect a shard group with a list of shards for each shard.
 		sg := s.TSDBStore.ShardGroup(req.ShardIDs)
 		if sg == nil {
-			typ = influxql.Unknown
-			return nil
+			return influxql.Unknown, nil
 		}
 
 		// Calculate data type from all shards.
+		m := &req.Measurement
 		var names []string
-		if req.Measurement.Regex != nil {
-			names = sg.MeasurementsByRegex(req.Measurement.Regex.Val)
+		if m.Regex != nil {
+			names = sg.MeasurementsByRegex(m.Regex.Val)
 		} else {
-			names = []string{req.Measurement.Name}
+			names = []string{m.Name}
 		}
 
+		var typ influxql.DataType
 		for _, name := range names {
-			if req.Measurement.SystemIterator != "" {
-				name = req.Measurement.SystemIterator
+			if m.SystemIterator != "" {
+				name = m.SystemIterator
 			}
 			t := sg.MapType(name, req.Field)
 			if typ.LessThan(t) {
 				typ = t
 			}
 		}
-
-		return nil
-	}(); err != nil {
+		return typ, nil
+	}()
+	if err != nil {
 		s.Logger.Error("Error reading MapType request", zap.Error(err))
-		rpc.EncodeTLV(conn, rpc.MapTypeResponseMessage, &rpc.MapTypeResponse{Err: err})
+		EncodeTLV(conn, mapTypeResponseMessage, &MapTypeResponse{Err: err})
 		return
 	}
 
 	// Encode success response.
-	if err := rpc.EncodeTLV(conn, rpc.MapTypeResponseMessage, &rpc.MapTypeResponse{
+	if err := EncodeTLV(conn, mapTypeResponseMessage, &MapTypeResponse{
 		Type: typ,
 	}); err != nil {
 		s.Logger.Error("Error writing MapType response", zap.Error(err))
@@ -678,8 +895,8 @@ func (s *Service) processExpandSourcesRequest(conn net.Conn) {
 	var sources influxql.Sources
 	if err := func() error {
 		// Parse request.
-		var req rpc.ExpandSourcesRequest
-		if err := rpc.DecodeLV(conn, &req); err != nil {
+		var req ExpandSourcesRequest
+		if err := DecodeLV(conn, &req); err != nil {
 			return err
 		}
 
@@ -699,12 +916,12 @@ func (s *Service) processExpandSourcesRequest(conn net.Conn) {
 		return nil
 	}(); err != nil {
 		s.Logger.Error("Error reading ExpandSources request", zap.Error(err))
-		rpc.EncodeTLV(conn, rpc.ExpandSourcesResponseMessage, &rpc.ExpandSourcesResponse{Err: err})
+		EncodeTLV(conn, expandSourcesResponseMessage, &ExpandSourcesResponse{Err: err})
 		return
 	}
 
 	// Encode success response.
-	if err := rpc.EncodeTLV(conn, rpc.ExpandSourcesResponseMessage, &rpc.ExpandSourcesResponse{
+	if err := EncodeTLV(conn, expandSourcesResponseMessage, &ExpandSourcesResponse{
 		Sources: sources,
 	}); err != nil {
 		s.Logger.Error("Error writing ExpandSources response", zap.Error(err))
@@ -715,8 +932,8 @@ func (s *Service) processExpandSourcesRequest(conn net.Conn) {
 func (s *Service) processBackupShardRequest(conn net.Conn) {
 	if err := func() error {
 		// Parse request.
-		var req rpc.BackupShardRequest
-		if err := rpc.DecodeLV(conn, &req); err != nil {
+		var req BackupShardRequest
+		if err := DecodeLV(conn, &req); err != nil {
 			return err
 		}
 
@@ -735,8 +952,8 @@ func (s *Service) processBackupShardRequest(conn net.Conn) {
 func (s *Service) processCopyShardRequest(conn net.Conn) {
 	if err := func() error {
 		// Parse request.
-		var req rpc.CopyShardRequest
-		if err := rpc.DecodeLV(conn, &req); err != nil {
+		var req CopyShardRequest
+		if err := DecodeLV(conn, &req); err != nil {
 			return err
 		}
 
@@ -760,12 +977,12 @@ func (s *Service) processCopyShardRequest(conn net.Conn) {
 		return nil
 	}(); err != nil {
 		s.Logger.Error("Error reading CopyShard request", zap.Error(err))
-		rpc.EncodeTLV(conn, rpc.CopyShardResponseMessage, &rpc.CopyShardResponse{Err: err})
+		EncodeTLV(conn, copyShardResponseMessage, &CopyShardResponse{Err: err})
 		return
 	}
 
 	// Encode success response.
-	if err := rpc.EncodeTLV(conn, rpc.CopyShardResponseMessage, &rpc.CopyShardResponse{}); err != nil {
+	if err := EncodeTLV(conn, copyShardResponseMessage, &CopyShardResponse{}); err != nil {
 		s.Logger.Error("Error writing CopyShard response", zap.Error(err))
 		return
 	}
@@ -773,7 +990,8 @@ func (s *Service) processCopyShardRequest(conn net.Conn) {
 
 // backupRemoteShard connects to a coordinator service on a remote host and streams a shard.
 func (s *Service) backupRemoteShard(host string, shardID uint64, since time.Time) (io.ReadCloser, error) {
-	conn, err := net.Dial("tcp", host)
+	tlsConfig := s.config.TLSClientConfig()
+	conn, err := tcp.DialTLS("tcp", host, tlsConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -786,7 +1004,7 @@ func (s *Service) backupRemoteShard(host string, shardID uint64, since time.Time
 		}
 
 		// Write backup request.
-		if err := rpc.EncodeTLV(conn, rpc.BackupShardRequestMessage, &rpc.BackupShardRequest{
+		if err := EncodeTLV(conn, backupShardRequestMessage, &BackupShardRequest{
 			ShardID: shardID,
 			Since:   since,
 		}); err != nil {
@@ -806,8 +1024,8 @@ func (s *Service) backupRemoteShard(host string, shardID uint64, since time.Time
 func (s *Service) processRemoveShardRequest(conn net.Conn) {
 	if err := func() error {
 		// Parse request.
-		var req rpc.RemoveShardRequest
-		if err := rpc.DecodeLV(conn, &req); err != nil {
+		var req RemoveShardRequest
+		if err := DecodeLV(conn, &req); err != nil {
 			return err
 		}
 
@@ -819,22 +1037,63 @@ func (s *Service) processRemoveShardRequest(conn net.Conn) {
 		return nil
 	}(); err != nil {
 		s.Logger.Error("Error reading RemoveShard request", zap.Error(err))
-		rpc.EncodeTLV(conn, rpc.RemoveShardResponseMessage, &rpc.RemoveShardResponse{Err: err})
+		EncodeTLV(conn, removeShardResponseMessage, &RemoveShardResponse{Err: err})
 		return
 	}
 
 	// Encode success response.
-	if err := rpc.EncodeTLV(conn, rpc.RemoveShardResponseMessage, &rpc.RemoveShardResponse{}); err != nil {
+	if err := EncodeTLV(conn, removeShardResponseMessage, &RemoveShardResponse{}); err != nil {
 		s.Logger.Error("Error writing RemoveShard response", zap.Error(err))
 		return
 	}
 }
 
+func (s *Service) processShowShardsRequest(conn net.Conn) {
+	shards := make(map[uint64]*meta.ShardOwnerInfo)
+	if err := func() error {
+		for _, id := range s.TSDBStore.ShardIDs() {
+			sh := s.TSDBStore.Shard(id)
+			if sh == nil {
+				continue
+			}
+			state := "hot"
+			if isIdle, _ := sh.IsIdle(); isIdle {
+				state = "cold"
+			}
+			size, err := sh.DiskSize()
+			owner := &meta.ShardOwnerInfo{
+				ID:           s.MetaClient.NodeID(),
+				TCPAddr:      s.Server.TCPAddr(),
+				State:        state,
+				LastModified: sh.LastModified(),
+				Size:         size,
+			}
+			if err != nil {
+				owner.Err = err.Error()
+			}
+			shards[sh.ID()] = owner
+		}
+
+		return nil
+	}(); err != nil {
+		s.Logger.Error("Error reading ShowShards request", zap.Error(err))
+		EncodeTLV(conn, showShardsResponseMessage, &ShowShardsResponse{Err: err})
+		return
+	}
+
+	// Encode success response.
+	if err := EncodeTLV(conn, showShardsResponseMessage, &ShowShardsResponse{Shards: shards}); err != nil {
+		s.Logger.Error("Error writing ShowShards response", zap.Error(err))
+		return
+	}
+}
+
 func (s *Service) processJoinClusterRequest(conn net.Conn) {
+	var node *meta.NodeInfo
 	if err := func() error {
 		// Parse request.
-		var req rpc.JoinClusterRequest
-		if err := rpc.DecodeLV(conn, &req); err != nil {
+		var req JoinClusterRequest
+		if err := DecodeLV(conn, &req); err != nil {
 			return err
 		}
 
@@ -867,48 +1126,50 @@ func (s *Service) processJoinClusterRequest(conn net.Conn) {
 			return err
 		}
 		if ns.Leader == "" {
-			return errors.New("no leader")
+			return fmt.Errorf("no leader in meta servers: %v", req.MetaServers)
 		}
 
 		if req.Update {
 			// Only check whether the current tcp addr already exists
-			tries, maxTries := 0, 100
-			_, err = s.MetaClient.DataNodeByTCPAddr(s.TCPAddr())
-			for err != nil && tries < maxTries {
-				tries += 1
+			timeout := time.Now().Add(10 * time.Second)
+			for {
+				node, err = s.MetaClient.DataNodeByTCPAddr(s.Server.TCPAddr())
+				if err == nil {
+					break
+				}
+				if time.Now().After(timeout) {
+					return fmt.Errorf("unable to update data node, timed out: %s", err)
+				}
 				time.Sleep(100 * time.Millisecond)
-				_, err = s.MetaClient.DataNodeByTCPAddr(s.TCPAddr())
-			}
-			if err != nil {
-				return fmt.Errorf("unable to update data node after %d retries: %s", maxTries, err)
 			}
 		} else {
 			// If we've already created a data node for our id, we're done
-			if _, err = s.MetaClient.DataNode(s.MetaClient.NodeID()); err == nil {
+			if node, err = s.MetaClient.DataNode(s.MetaClient.NodeID()); err == nil {
 				return nil
 			}
 
-			tries, maxTries := 0, 10
-			_, err = s.MetaClient.CreateDataNode(s.HTTPAddr(), s.TCPAddr())
-			for err != nil && tries < maxTries {
-				tries += 1
+			timeout := time.Now().Add(10 * time.Second)
+			for {
+				node, err = s.MetaClient.CreateDataNode(s.Server.HTTPAddr(), s.Server.TCPAddr())
+				if err == nil {
+					break
+				}
+				if time.Now().After(timeout) {
+					return fmt.Errorf("unable to create data node, timed out: %s", err)
+				}
 				time.Sleep(time.Second)
-				_, err = s.MetaClient.CreateDataNode(s.HTTPAddr(), s.TCPAddr())
-			}
-			if err != nil {
-				return fmt.Errorf("unable to create data node after %d retries: %s", maxTries, err)
 			}
 		}
 
 		return nil
 	}(); err != nil {
 		s.Logger.Error("Error reading JoinCluster request", zap.Error(err))
-		rpc.EncodeTLV(conn, rpc.JoinClusterResponseMessage, &rpc.JoinClusterResponse{Err: err})
+		EncodeTLV(conn, joinClusterResponseMessage, &JoinClusterResponse{Err: err})
 		return
 	}
 
 	// Encode success response.
-	if err := rpc.EncodeTLV(conn, rpc.JoinClusterResponseMessage, &rpc.JoinClusterResponse{}); err != nil {
+	if err := EncodeTLV(conn, joinClusterResponseMessage, &JoinClusterResponse{Node: node}); err != nil {
 		s.Logger.Error("Error writing JoinCluster response", zap.Error(err))
 		return
 	}
@@ -916,16 +1177,19 @@ func (s *Service) processJoinClusterRequest(conn net.Conn) {
 
 func (s *Service) processLeaveClusterRequest(conn net.Conn) {
 	if err := func() error {
-		tries, maxTries := 0, 100
-		_, err := s.MetaClient.DataNodeByTCPAddr(s.TCPAddr())
-		for err == nil && tries < maxTries {
-			tries += 1
+		timeout := time.Now().Add(10 * time.Second)
+		for {
+			_, err := s.MetaClient.DataNodeByTCPAddr(s.Server.TCPAddr())
+			if err != nil {
+				break
+			}
+			if time.Now().After(timeout) {
+				s.Logger.Warn(fmt.Sprintf("Data node %s still exists, already tried to check leaved and timed out", s.Server.TCPAddr()))
+				break
+			}
 			time.Sleep(100 * time.Millisecond)
-			_, err = s.MetaClient.DataNodeByTCPAddr(s.TCPAddr())
 		}
-		if err == nil {
-			s.Logger.Warn(fmt.Sprintf("Data node %s still exists, already tried to check leaved %d times", s.TCPAddr(), maxTries))
-		}
+
 		s.MetaClient.SetMetaServers(nil)
 		if err := s.MetaClient.Save(); err != nil {
 			s.Logger.Error("Error saving meta servers", zap.Error(err))
@@ -934,31 +1198,45 @@ func (s *Service) processLeaveClusterRequest(conn net.Conn) {
 		return nil
 	}(); err != nil {
 		s.Logger.Error("Error reading LeaveCluster request", zap.Error(err))
-		rpc.EncodeTLV(conn, rpc.LeaveClusterResponseMessage, &rpc.LeaveClusterResponse{Err: err})
+		EncodeTLV(conn, leaveClusterResponseMessage, &LeaveClusterResponse{Err: err})
 		return
 	}
 
 	// Encode success response.
-	if err := rpc.EncodeTLV(conn, rpc.LeaveClusterResponseMessage, &rpc.LeaveClusterResponse{}); err != nil {
+	if err := EncodeTLV(conn, leaveClusterResponseMessage, &LeaveClusterResponse{}); err != nil {
 		s.Logger.Error("Error writing LeaveCluster response", zap.Error(err))
 		return
 	}
+
+	// Reset server.
+	go func() {
+		if err := s.Server.Reset(); err != nil {
+			s.Logger.Error("Error resetting data server", zap.Error(err))
+		}
+	}()
 }
 
-// openHTTPListener opens http listener.
-func (s *Service) openHTTPListener() error {
-	tries, maxTries := 0, 100
-	addr := s.DefaultListener.Addr()
-	for addr == nil && tries < maxTries {
-		tries += 1
-		time.Sleep(100 * time.Millisecond)
-		addr = s.DefaultListener.Addr()
+func (s *Service) processRemoveHintedHandoffRequest(conn net.Conn) {
+	if err := func() error {
+		// Parse request.
+		var req RemoveHintedHandoffRequest
+		if err := DecodeLV(conn, &req); err != nil {
+			return err
+		}
+
+		// Remove local hinted handoff node.
+		return s.HintedHandoff.RemoveNode(req.NodeID)
+	}(); err != nil {
+		s.Logger.Error("Error reading RemoveHintedHandoff request", zap.Error(err))
+		EncodeTLV(conn, removeHintedHandoffResponseMessage, &RemoveHintedHandoffResponse{Err: err})
+		return
 	}
-	if addr == nil {
-		return errors.New("default listen addr is nil")
+
+	// Encode success response.
+	if err := EncodeTLV(conn, removeHintedHandoffResponseMessage, &RemoveHintedHandoffResponse{}); err != nil {
+		s.Logger.Error("Error writing RemoveHintedHandoff response", zap.Error(err))
+		return
 	}
-	s.httpListener = newChanListener(addr)
-	return nil
 }
 
 // serveDefault accepts connections from the default listener and handles them.
@@ -1024,30 +1302,128 @@ func (s *Service) serveHTTP() {
 	srv.Serve(s.httpListener)
 }
 
-// HTTPAddr returns the HTTP address.
-func (s *Service) HTTPAddr() string {
-	addr := s.config.RemoteHTTPBindAddress
-	tries, maxTries := 0, 10
-	for (s.HTTPDService == nil || s.HTTPDService.Addr() == nil) && tries < maxTries {
-		tries += 1
-		time.Sleep(200 * time.Millisecond)
+// ReadTLV reads a type-length-value record from r.
+func ReadTLV(r io.Reader) (byte, []byte, error) {
+	typ, err := ReadType(r)
+	if err != nil {
+		return 0, nil, err
 	}
-	if tries < maxTries {
-		addr = s.HTTPDService.Addr().String()
+
+	buf, err := ReadLV(r)
+	if err != nil {
+		return 0, nil, err
 	}
-	return s.MetaClient.RemoteAddr(addr)
+	return typ, buf, err
 }
 
-// TCPAddr returns the TCP address.
-func (s *Service) TCPAddr() string {
-	addr := s.config.RemoteBindAddress
-	tries, maxTries := 0, 10
-	for (s.Listener == nil || s.Listener.Addr() == nil) && tries < maxTries {
-		tries += 1
-		time.Sleep(200 * time.Millisecond)
+// ReadType reads the type from a TLV record.
+func ReadType(r io.Reader) (byte, error) {
+	var typ [1]byte
+	if _, err := io.ReadFull(r, typ[:]); err != nil {
+		return 0, fmt.Errorf("read message type: %s", err)
 	}
-	if tries < maxTries {
-		addr = s.Listener.Addr().String()
+	return typ[0], nil
+}
+
+// ReadLV reads the length-value from a TLV record.
+func ReadLV(r io.Reader) ([]byte, error) {
+	// Read the size of the message.
+	var sz int64
+	if err := binary.Read(r, binary.BigEndian, &sz); err != nil {
+		return nil, fmt.Errorf("read message size: %s", err)
 	}
-	return s.MetaClient.RemoteAddr(addr)
+
+	if sz >= MaxMessageSize {
+		return nil, fmt.Errorf("max message size of %d exceeded: %d", MaxMessageSize, sz)
+	}
+
+	// Read the value.
+	buf := make([]byte, sz)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return nil, fmt.Errorf("read message value: %s", err)
+	}
+
+	return buf, nil
+}
+
+// WriteTLV writes a type-length-value record to w.
+func WriteTLV(w io.Writer, typ byte, buf []byte) error {
+	if err := WriteType(w, typ); err != nil {
+		return err
+	}
+	if err := WriteLV(w, buf); err != nil {
+		return err
+	}
+	return nil
+}
+
+// WriteType writes the type in a TLV record to w.
+func WriteType(w io.Writer, typ byte) error {
+	if _, err := w.Write([]byte{typ}); err != nil {
+		return fmt.Errorf("write message type: %s", err)
+	}
+	return nil
+}
+
+// WriteLV writes the length-value in a TLV record to w.
+func WriteLV(w io.Writer, buf []byte) error {
+	// Write the size of the message.
+	if err := binary.Write(w, binary.BigEndian, int64(len(buf))); err != nil {
+		return fmt.Errorf("write message size: %s", err)
+	}
+
+	// Write the value.
+	if _, err := w.Write(buf); err != nil {
+		return fmt.Errorf("write message value: %s", err)
+	}
+	return nil
+}
+
+// EncodeTLV encodes v to a binary format and writes the record-length-value record to w.
+func EncodeTLV(w io.Writer, typ byte, v encoding.BinaryMarshaler) error {
+	if err := WriteType(w, typ); err != nil {
+		return err
+	}
+	if err := EncodeLV(w, v); err != nil {
+		return err
+	}
+	return nil
+}
+
+// EncodeLV encodes v to a binary format and writes the length-value record to w.
+func EncodeLV(w io.Writer, v encoding.BinaryMarshaler) error {
+	buf, err := v.MarshalBinary()
+	if err != nil {
+		return err
+	}
+
+	if err := WriteLV(w, buf); err != nil {
+		return err
+	}
+	return nil
+}
+
+// DecodeTLV reads the type-length-value record from r and unmarshals it into v.
+func DecodeTLV(r io.Reader, v encoding.BinaryUnmarshaler) (typ byte, err error) {
+	typ, err = ReadType(r)
+	if err != nil {
+		return 0, err
+	}
+	if err := DecodeLV(r, v); err != nil {
+		return 0, err
+	}
+	return typ, nil
+}
+
+// DecodeLV reads the length-value record from r and unmarshals it into v.
+func DecodeLV(r io.Reader, v encoding.BinaryUnmarshaler) error {
+	buf, err := ReadLV(r)
+	if err != nil {
+		return err
+	}
+
+	if err := v.UnmarshalBinary(buf); err != nil {
+		return err
+	}
+	return nil
 }

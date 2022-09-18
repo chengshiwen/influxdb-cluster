@@ -124,12 +124,12 @@ func (s *Service) run() {
 			shardsNoWritesYet := 0
 			dbs := s.MetaClient.Databases()
 			for _, db := range dbs {
-				if db.Name == s.config.RemoteStoreDatabase {
-					continue
-				}
 				for _, rp := range db.RetentionPolicies {
 					for _, sg := range rp.ShardGroups {
 						for _, sh := range sg.Shards {
+							if len(sh.Owners) <= 1 {
+								continue
+							}
 							shard := s.TSDBStore.Shard(sh.ID)
 							if shard == nil {
 								shardsMissing += 1

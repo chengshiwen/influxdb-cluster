@@ -19,6 +19,7 @@ import (
 	"github.com/influxdata/influxdb/monitor"
 	"github.com/influxdata/influxdb/query"
 	"github.com/influxdata/influxdb/services/ae"
+	"github.com/influxdata/influxdb/services/announcer"
 	"github.com/influxdata/influxdb/services/collectd"
 	"github.com/influxdata/influxdb/services/continuous_querier"
 	"github.com/influxdata/influxdb/services/graphite"
@@ -98,6 +99,15 @@ type Server struct {
 	MemProfile            string
 	MemProfileWriteCloser io.WriteCloser
 
+	// httpAPIAddr is the host:port combination for the main HTTP API for querying and writing data
+	httpAPIAddr string
+
+	// httpUseTLS specifies if we should use a TLS connection to the http servers
+	httpUseTLS bool
+
+	// tcpAddr is the host:port combination for the TCP listener that services mux onto
+	tcpAddr string
+
 	config *Config
 }
 
@@ -119,6 +129,7 @@ func NewServer(c *Config, buildInfo *BuildInfo) (*Server, error) {
 
 	// Update the TLS values on each of the configs to be the parsed one if
 	// not already specified (set the default).
+	updateTLSConfig(&c.Coordinator.TLS, tlsConfig)
 	updateTLSConfig(&c.HTTPD.TLS, tlsConfig)
 	updateTLSConfig(&c.Subscriber.TLS, tlsConfig)
 	for i := range c.OpenTSDBInputs {
@@ -147,10 +158,17 @@ func NewServer(c *Config, buildInfo *BuildInfo) (*Server, error) {
 
 		reportingDisabled: c.ReportingDisabled,
 
+		httpAPIAddr: c.HTTPD.BindAddress,
+		httpUseTLS:  c.HTTPD.HTTPSEnabled,
+		tcpAddr:     bind,
+
 		config: c,
 	}
 	s.Monitor = monitor.New(s, c.Monitor)
 	s.config.registerDiagnostics(s.Monitor)
+
+	// Set tcp addr on the client.
+	s.MetaClient.SetTCPAddr(s.TCPAddr())
 
 	s.TSDBStore = tsdb.NewStore(c.Data.Dir)
 	s.TSDBStore.EngineOptions.Config = c.Data
@@ -159,8 +177,13 @@ func NewServer(c *Config, buildInfo *BuildInfo) (*Server, error) {
 	s.TSDBStore.EngineOptions.EngineVersion = c.Data.Engine
 	s.TSDBStore.EngineOptions.IndexVersion = c.Data.Index
 
+	// Create TLS client config
+	tlsClientConfig := c.Coordinator.TLSClientConfig()
+
 	// Set the shard writer
-	s.ShardWriter = coordinator.NewShardWriter(coordinator.DefaultShardWriterTimeout, coordinator.DefaultMaxRemoteWriteConnections)
+	s.ShardWriter = coordinator.NewShardWriter(time.Duration(c.Coordinator.WriteTimeout), time.Duration(c.Coordinator.DialTimeout),
+		time.Duration(c.Coordinator.PoolMaxIdleTime), c.Coordinator.PoolMaxIdleStreams)
+	s.ShardWriter.TLSConfig = tlsClientConfig
 
 	// Create the hinted handoff service
 	s.HintedHandoff = hh.NewService(c.HintedHandoff, s.ShardWriter)
@@ -178,23 +201,24 @@ func NewServer(c *Config, buildInfo *BuildInfo) (*Server, error) {
 	s.PointsWriter.Subscriber = s.Subscriber
 
 	// Initialize meta executor.
-	metaExecutor := coordinator.NewMetaExecutor()
+	metaExecutor := coordinator.NewMetaExecutor(time.Duration(c.Coordinator.QueryTimeout), time.Duration(c.Coordinator.DialTimeout))
 	metaExecutor.MetaClient = s.MetaClient
+	metaExecutor.TLSConfig = tlsClientConfig
 
 	// Initialize query executor.
 	s.QueryExecutor = query.NewExecutor()
 	s.QueryExecutor.StatementExecutor = &coordinator.StatementExecutor{
 		MetaClient:  s.MetaClient,
 		TaskManager: s.QueryExecutor.TaskManager,
-		TSDBStore:   s.TSDBStore,
+		TSDBStore:   coordinator.ClusterTSDBStore{Store: s.TSDBStore, MetaExecutor: metaExecutor},
 		ShardMapper: &coordinator.ClusterShardMapper{
-			MetaClient: s.MetaClient,
-			TSDBStore:  coordinator.LocalTSDBStore{Store: s.TSDBStore},
+			MetaClient:   s.MetaClient,
+			TSDBStore:    s.TSDBStore,
+			MetaExecutor: metaExecutor,
 		},
 		StrictErrorHandling: s.TSDBStore.EngineOptions.Config.StrictErrorHandling,
 		Monitor:             s.Monitor,
 		PointsWriter:        s.PointsWriter,
-		MetaExecutor:        metaExecutor,
 		MaxSelectPointN:     c.Coordinator.MaxSelectPointN,
 		MaxSelectSeriesN:    c.Coordinator.MaxSelectSeriesN,
 		MaxSelectBucketsN:   c.Coordinator.MaxSelectBucketsN,
@@ -218,6 +242,7 @@ func (s *Server) Statistics(tags map[string]string) []models.Statistic {
 	statistics = append(statistics, s.QueryExecutor.Statistics(tags)...)
 	statistics = append(statistics, s.TSDBStore.Statistics(tags)...)
 	statistics = append(statistics, s.PointsWriter.Statistics(tags)...)
+	statistics = append(statistics, s.HintedHandoff.Statistics(tags)...)
 	statistics = append(statistics, s.Subscriber.Statistics(tags)...)
 	for _, srv := range s.Services {
 		if m, ok := srv.(monitor.Reporter); ok {
@@ -231,7 +256,9 @@ func (s *Server) appendCoordinatorService(c coordinator.Config) {
 	srv := coordinator.NewService(c)
 	srv.TSDBStore = s.TSDBStore
 	srv.MetaClient = s.MetaClient
+	srv.HintedHandoff = s.HintedHandoff
 	srv.Monitor = s.Monitor
+	srv.Server = s
 	s.Services = append(s.Services, srv)
 	s.CoordinatorService = srv
 }
@@ -246,6 +273,14 @@ func (s *Server) appendSnapshotterService() {
 
 func (s *Server) appendMonitorService() {
 	s.Services = append(s.Services, s.Monitor)
+}
+
+func (s *Server) appendAnnouncerService(c *meta.Config) {
+	srv := announcer.NewService(c)
+	srv.Server = s
+	srv.MetaClient = s.MetaClient
+	srv.Version = s.buildInfo.Version
+	s.Services = append(s.Services, srv)
 }
 
 func (s *Server) appendRetentionPolicyService(c retention.Config) {
@@ -287,7 +322,6 @@ func (s *Server) appendHTTPDService(c httpd.Config) {
 	if s.config.HTTPD.FluxEnabled {
 		srv.Handler.Controller = control.NewController(s.MetaClient, reads.NewReader(ss), authorizer, c.AuthEnabled, s.Logger)
 	}
-	s.CoordinatorService.HTTPDService = srv
 
 	s.Services = append(s.Services, srv)
 }
@@ -374,7 +408,11 @@ func (s *Server) Open() error {
 	}
 
 	// Open shared TCP connection.
-	ln, err := net.Listen("tcp", s.BindAddress)
+	tlsConfig, err := s.config.Coordinator.TLSConfig()
+	if err != nil {
+		return fmt.Errorf("tls config: %s", err)
+	}
+	ln, err := tcp.ListenTLS("tcp", s.BindAddress, tlsConfig)
 	if err != nil {
 		return fmt.Errorf("listen: %s", err)
 	}
@@ -384,9 +422,6 @@ func (s *Server) Open() error {
 	mux := tcp.NewMux()
 	go mux.Serve(ln)
 
-	// Set tcp addr on the client.
-	s.MetaClient.SetTCPAddr(ln.Addr().String())
-
 	// Append services.
 	s.appendMonitorService()
 	s.appendCoordinatorService(s.config.Coordinator)
@@ -394,6 +429,7 @@ func (s *Server) Open() error {
 	s.appendSnapshotterService()
 	s.appendContinuousQueryService(s.config.ContinuousQuery)
 	s.appendHTTPDService(s.config.HTTPD)
+	s.appendAnnouncerService(s.config.Meta)
 	s.appendRetentionPolicyService(s.config.Retention)
 	s.appendAntiEntropyService(s.config.AntiEntropy)
 	for _, i := range s.config.GraphiteInputs {
@@ -525,6 +561,47 @@ func (s *Server) Close() error {
 	return nil
 }
 
+// Reset resets the data stores and all services.
+func (s *Server) Reset() error {
+	if err := s.Close(); err != nil {
+		return err
+	}
+
+	if err := os.RemoveAll(s.config.Data.Dir); err != nil {
+		return fmt.Errorf("remove all: %s", err)
+	}
+	if err := os.RemoveAll(s.config.Data.WALDir); err != nil {
+		return fmt.Errorf("remove all: %s", err)
+	}
+	if err := os.RemoveAll(s.config.HintedHandoff.Dir); err != nil {
+		return fmt.Errorf("remove all: %s", err)
+	}
+
+	svr, err := NewServer(s.config, &s.buildInfo)
+	if err != nil {
+		return fmt.Errorf("create server: %s", err)
+	}
+	close(svr.err)
+	s.closing = svr.closing
+	s.MetaClient = svr.MetaClient
+	s.TSDBStore = svr.TSDBStore
+	s.QueryExecutor = svr.QueryExecutor
+	s.PointsWriter = svr.PointsWriter
+	s.ShardWriter = svr.ShardWriter
+	s.HintedHandoff = svr.HintedHandoff
+	s.Subscriber = svr.Subscriber
+	s.Services = svr.Services
+	s.CoordinatorService = svr.CoordinatorService
+	s.SnapshotterService = svr.SnapshotterService
+	s.Monitor = svr.Monitor
+
+	if err = s.Open(); err != nil {
+		return fmt.Errorf("open server: %s", err)
+	}
+
+	return nil
+}
+
 // startServerReporting starts periodic server reporting.
 func (s *Server) startServerReporting() {
 	s.reportServer()
@@ -597,6 +674,24 @@ func (s *Server) reportServer() {
 		fields = append(fields, zap.Any(k, v))
 	}
 	s.Logger.Info("Reporting usage statistics", fields...)
+}
+
+// HTTPAddr returns the HTTP address used by other nodes for HTTP queries and writes.
+func (s *Server) HTTPAddr() string {
+	return meta.RemoteAddr(s.config.Hostname, s.httpAPIAddr)
+}
+
+// HTTPScheme returns the HTTP scheme to specify if we should use a TLS connection.
+func (s *Server) HTTPScheme() string {
+	if s.httpUseTLS {
+		return "https"
+	}
+	return "http"
+}
+
+// TCPAddr returns the TCP address used by other nodes for cluster communication.
+func (s *Server) TCPAddr() string {
+	return meta.RemoteAddr(s.config.Hostname, s.tcpAddr)
 }
 
 // Service represents a service attached to the server.

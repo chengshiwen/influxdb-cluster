@@ -99,7 +99,7 @@ targets = {
 
 supported_builds = {
     'darwin': [ "amd64", "arm64" ],
-    'windows': [ "amd64" ],
+    'windows': [ "amd64", "static_amd64" ],
     'linux': [ "amd64", "i386", "armhf", "arm64", "static_amd64", "static_arm64" ]
 }
 

@@ -22,7 +22,7 @@ const (
 	DefaultRetryConcurrency = 20
 
 	// DefaultRetryRateLimit is the default rate that hinted handoffs will be retried.
-	// The rate is in bytes per second and applies across all nodes when retried.   A
+	// The rate is in bytes per second and applies across all nodes when retried. A
 	// value of 0 disables the rate limit.
 	DefaultRetryRateLimit = 0
 
@@ -43,7 +43,8 @@ const (
 	// DefaultBatchSize is the maximum number of bytes to write to a shard in a single request.
 	DefaultBatchSize = 512000
 
-	// DefaultMaxWritesPending is the maximum number of incoming pending writes allowed in the hinted handoff queue.
+	// DefaultMaxWritesPending is the maximum number of incoming pending writes
+	// allowed in the hinted handoff queue.
 	DefaultMaxWritesPending = 1024
 )
 

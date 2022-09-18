@@ -1,33 +1,40 @@
 package coordinator
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
 	"time"
 
-	"github.com/influxdata/influxdb/coordinator/rpc"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/services/meta"
+	"github.com/influxdata/influxdb/tcp"
 )
 
 // ShardWriter writes a set of points to a shard.
 type ShardWriter struct {
 	pool           *clientPool
 	timeout        time.Duration
-	maxConnections int
+	dialTimeout    time.Duration
+	idleTimeout    time.Duration
+	maxIdleStreams int
 
 	MetaClient interface {
 		DataNode(id uint64) (ni *meta.NodeInfo, err error)
 		ShardOwner(shardID uint64) (database, policy string, sgi *meta.ShardGroupInfo)
 	}
+
+	TLSConfig *tls.Config
 }
 
 // NewShardWriter returns a new instance of ShardWriter.
-func NewShardWriter(timeout time.Duration, maxConnections int) *ShardWriter {
+func NewShardWriter(timeout, dialTimeout, idleTimeout time.Duration, maxIdleStreams int) *ShardWriter {
 	return &ShardWriter{
 		pool:           newClientPool(),
 		timeout:        timeout,
-		maxConnections: maxConnections,
+		dialTimeout:    dialTimeout,
+		idleTimeout:    idleTimeout,
+		maxIdleStreams: maxIdleStreams,
 	}
 }
 
@@ -56,7 +63,7 @@ func (w *ShardWriter) WriteShard(shardID, ownerID uint64, points []models.Point)
 	}
 
 	// Build write request.
-	var request rpc.WriteShardRequest
+	var request WriteShardRequest
 	request.SetShardID(shardID)
 	request.SetDatabase(db)
 	request.SetRetentionPolicy(rp)
@@ -70,21 +77,21 @@ func (w *ShardWriter) WriteShard(shardID, ownerID uint64, points []models.Point)
 
 	// Write request.
 	conn.SetWriteDeadline(time.Now().Add(w.timeout))
-	if err := rpc.WriteTLV(conn, rpc.WriteShardRequestMessage, buf); err != nil {
+	if err := WriteTLV(conn, writeShardRequestMessage, buf); err != nil {
 		conn.MarkUnusable()
 		return err
 	}
 
 	// Read the response.
 	conn.SetReadDeadline(time.Now().Add(w.timeout))
-	_, buf, err = rpc.ReadTLV(conn)
+	_, buf, err = ReadTLV(conn)
 	if err != nil {
 		conn.MarkUnusable()
 		return err
 	}
 
 	// Unmarshal response.
-	var response rpc.WriteShardResponse
+	var response WriteShardResponse
 	if err := response.UnmarshalBinary(buf); err != nil {
 		return err
 	}
@@ -100,10 +107,10 @@ func (w *ShardWriter) dial(nodeID uint64) (net.Conn, error) {
 	// If we don't have a connection pool for that addr yet, create one
 	_, ok := w.pool.getPool(nodeID)
 	if !ok {
-		factory := &connFactory{nodeID: nodeID, clientPool: w.pool, timeout: w.timeout}
+		factory := &connFactory{nodeID: nodeID, clientPool: w.pool, timeout: w.dialTimeout, tlsConfig: w.TLSConfig}
 		factory.metaClient = w.MetaClient
 
-		p, err := NewBoundedPool(1, w.maxConnections, w.timeout, factory.dial)
+		p, err := NewBoundedPool(1, w.maxIdleStreams, w.idleTimeout, DefaultPoolWaitTimeout, factory.dial)
 		if err != nil {
 			return nil, err
 		}
@@ -123,7 +130,7 @@ func (w *ShardWriter) Close() error {
 }
 
 const (
-	maxConnections = 500
+	maxConnections = 1000
 	maxRetries     = 3
 )
 
@@ -140,6 +147,8 @@ type connFactory struct {
 	metaClient interface {
 		DataNode(id uint64) (ni *meta.NodeInfo, err error)
 	}
+
+	tlsConfig *tls.Config
 }
 
 func (c *connFactory) dial() (net.Conn, error) {
@@ -156,7 +165,7 @@ func (c *connFactory) dial() (net.Conn, error) {
 		return nil, fmt.Errorf("node %d does not exist", c.nodeID)
 	}
 
-	conn, err := net.DialTimeout("tcp", ni.TCPAddr, c.timeout)
+	conn, err := tcp.DialTLSTimeout("tcp", ni.TCPAddr, c.tlsConfig, c.timeout)
 	if err != nil {
 		return nil, err
 	}

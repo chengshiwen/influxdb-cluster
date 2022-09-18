@@ -2,13 +2,10 @@ package remove_meta
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"strings"
 
@@ -39,10 +36,8 @@ func NewCommand(cOpts *common.Options) *Command {
 // Run executes the program.
 func (cmd *Command) Run(args ...string) error {
 	args, err := cmd.parseFlags(args)
-	if err == flag.ErrHelp {
+	if err != nil {
 		return nil
-	} else if err != nil {
-		return err
 	}
 	if len(args) == 0 {
 		return errors.New("addr is required")
@@ -52,65 +47,60 @@ func (cmd *Command) Run(args ...string) error {
 	if cmd.force && cmd.tcpAddr == "" {
 		return errors.New("-tcpAddr is required with -force")
 	}
+	err = cmd.removeMeta(args[0])
+	return common.OperationExitedError(err)
+}
 
-	if !cmd.yes {
-		if cmd.force {
-			fmt.Fprintf(cmd.Stdout, "Force remove %s from the cluster [y/N]: ", args[0])
-		} else {
-			fmt.Fprintf(cmd.Stdout, "Remove %s from the cluster [y/N]: ", args[0])
+// remove meta node.
+func (cmd *Command) removeMeta(addr string) error {
+	hint := fmt.Sprintf("Remove %s from the cluster", addr)
+	if cmd.force {
+		hint = fmt.Sprintf("Force remove %s from the cluster", addr)
+	}
+	err := cmd.prompt(hint)
+	if err == common.ErrPromptNotYes {
+		return nil
+	} else if err != nil {
+		return err
+	}
+
+	client := common.NewHTTPClient(cmd.cOpts)
+	defer client.Close()
+	if cmd.force && cmd.tcpAddr != "" {
+		if err = client.Remove(addr, cmd.force, cmd.tcpAddr); err != nil {
+			return err
 		}
+	} else {
+		ns := &meta.MetaNodeStatus{}
+		if err = client.Status(addr, ns); err != nil {
+			return err
+		}
+		if ns.NodeType != meta.NodeTypeMeta {
+			return fmt.Errorf("%s is not a meta node", addr)
+		}
+		if ns.Leader == "" {
+			return fmt.Errorf("%s is not part of a cluster", addr)
+		}
+		if err = client.Leave(addr); err != nil {
+			return err
+		}
+	}
+	fmt.Fprintf(cmd.Stdout, "Removed meta node at %s\n", addr)
+	return nil
+}
+
+func (cmd *Command) prompt(hint string) error {
+	if !cmd.yes {
+		fmt.Fprintf(cmd.Stdout, "%s [y/N]: ", hint)
 		scan := bufio.NewScanner(os.Stdin)
 		scan.Scan()
 		if scan.Err() != nil {
 			return fmt.Errorf("error reading STDIN: %v", scan.Err())
 		}
 		if strings.ToLower(scan.Text()) != "y" {
-			return nil
+			return common.ErrPromptNotYes
 		}
 	}
-	err = cmd.removeMeta(args[0])
-	return common.OperationExitedError(err)
-}
-
-// remove meta addr.
-func (cmd *Command) removeMeta(addr string) error {
-	client := common.NewHTTPClient(cmd.cOpts)
-	data := url.Values{"httpAddr": {addr}}
-	var resp *http.Response
-	var err error
-	if cmd.force && cmd.tcpAddr != "" {
-		data.Set("force", "true")
-		data.Set("tcpAddr", cmd.tcpAddr)
-		resp, err = client.PostForm("/remove", data)
-	} else {
-		srsp, err := client.GetWithAddr(addr, "/status")
-		if err != nil {
-			return err
-		}
-		defer srsp.Body.Close()
-		if srsp.StatusCode != http.StatusOK {
-			return meta.DecodeErrorResponse(srsp.Body)
-		}
-
-		ns := &meta.MetaNodeStatus{}
-		if err = json.NewDecoder(srsp.Body).Decode(ns); err != nil {
-			return err
-		}
-		if ns.Leader == "" {
-			return errors.New("no leader")
-		}
-
-		resp, err = client.PostEmptyWithAddr(addr, "/leave")
-	}
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
-		return meta.DecodeErrorResponse(resp.Body)
-	}
-
-	fmt.Fprintf(cmd.Stdout, "Removed meta node at %s\n", addr)
 	return nil
 }
 

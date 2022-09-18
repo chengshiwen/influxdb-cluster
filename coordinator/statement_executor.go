@@ -14,12 +14,14 @@ import (
 	"github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/monitor"
+	"github.com/influxdata/influxdb/pkg/bytesutil"
 	"github.com/influxdata/influxdb/pkg/tracing"
 	"github.com/influxdata/influxdb/pkg/tracing/fields"
 	"github.com/influxdata/influxdb/query"
 	"github.com/influxdata/influxdb/services/meta"
 	"github.com/influxdata/influxdb/tsdb"
 	"github.com/influxdata/influxql"
+	"golang.org/x/sync/errgroup"
 )
 
 // ErrDatabaseNameRequired is returned when executing statements that require a database,
@@ -50,9 +52,6 @@ type StatementExecutor struct {
 	PointsWriter interface {
 		WritePointsInto(*IntoWriteRequest) error
 	}
-
-	// Used for executing meta statements on all data nodes.
-	MetaExecutor *MetaExecutor
 
 	// Disallow INF values in SELECT INTO and other previously ignored errors
 	StrictErrorHandling bool
@@ -332,13 +331,8 @@ func (e *StatementExecutor) executeDeleteSeriesStatement(stmt *influxql.DeleteSe
 	// Convert "now()" to current time.
 	stmt.Condition = influxql.Reduce(stmt.Condition, &influxql.NowValuer{Now: time.Now().UTC()})
 
-	// Locally delete the series.
-	if err := e.TSDBStore.DeleteSeries(database, stmt.Sources, stmt.Condition); err != nil {
-		return err
-	}
-
-	// Execute the statement on the other data nodes in the cluster.
-	return e.MetaExecutor.ExecuteStatement(stmt, database)
+	// Delete the series.
+	return e.TSDBStore.DeleteSeries(database, stmt.Sources, stmt.Condition)
 }
 
 func (e *StatementExecutor) executeDropContinuousQueryStatement(q *influxql.DropContinuousQueryStatement) error {
@@ -353,13 +347,8 @@ func (e *StatementExecutor) executeDropDatabaseStatement(stmt *influxql.DropData
 		return nil
 	}
 
-	// Locally delete the datababse.
+	// Delete the database.
 	if err := e.TSDBStore.DeleteDatabase(stmt.Name); err != nil {
-		return err
-	}
-
-	// Execute the statement on the other data nodes in the cluster.
-	if err := e.MetaExecutor.ExecuteStatement(stmt, ""); err != nil {
 		return err
 	}
 
@@ -372,13 +361,8 @@ func (e *StatementExecutor) executeDropMeasurementStatement(stmt *influxql.DropM
 		return query.ErrDatabaseNotFound(database)
 	}
 
-	// Locally drop the measurement
-	if err := e.TSDBStore.DeleteMeasurement(database, stmt.Name); err != nil {
-		return err
-	}
-
-	// Execute the statement on the other data nodes in the cluster.
-	return e.MetaExecutor.ExecuteStatement(stmt, database)
+	// Drop the measurement.
+	return e.TSDBStore.DeleteMeasurement(database, stmt.Name)
 }
 
 func (e *StatementExecutor) executeDropSeriesStatement(stmt *influxql.DropSeriesStatement, database string) error {
@@ -391,23 +375,13 @@ func (e *StatementExecutor) executeDropSeriesStatement(stmt *influxql.DropSeries
 		return errors.New("DROP SERIES doesn't support time in WHERE clause")
 	}
 
-	// Locally drop the series.
-	if err := e.TSDBStore.DeleteSeries(database, stmt.Sources, stmt.Condition); err != nil {
-		return err
-	}
-
-	// Execute the statement on the other data nodes in the cluster.
-	return e.MetaExecutor.ExecuteStatement(stmt, database)
+	// Drop the series.
+	return e.TSDBStore.DeleteSeries(database, stmt.Sources, stmt.Condition)
 }
 
 func (e *StatementExecutor) executeDropShardStatement(stmt *influxql.DropShardStatement) error {
-	// Locally delete the shard.
+	// Delete the shard.
 	if err := e.TSDBStore.DeleteShard(stmt.ID); err != nil {
-		return err
-	}
-
-	// Execute the statement on the other data nodes in the cluster.
-	if err := e.MetaExecutor.ExecuteStatement(stmt, ""); err != nil {
 		return err
 	}
 
@@ -425,13 +399,8 @@ func (e *StatementExecutor) executeDropRetentionPolicyStatement(stmt *influxql.D
 		return nil
 	}
 
-	// Locally drop the retention policy.
+	// Drop the retention policy.
 	if err := e.TSDBStore.DeleteRetentionPolicy(stmt.Database, stmt.Name); err != nil {
-		return err
-	}
-
-	// Execute the statement on the other data nodes in the cluster.
-	if err := e.MetaExecutor.ExecuteStatement(stmt, stmt.Database); err != nil {
 		return err
 	}
 
@@ -1415,9 +1384,12 @@ type IntoWriteRequest struct {
 
 // TSDBStore is an interface for accessing the time series data store.
 type TSDBStore interface {
+	ShardIDs() []uint64
+	Shard(id uint64) *tsdb.Shard
+	ShardGroup(ids []uint64) tsdb.ShardGroup
+
 	CreateShard(database, policy string, shardID uint64, enabled bool) error
 	WriteToShard(shardID uint64, points []models.Point) error
-	ShardGroup(ids []uint64) tsdb.ShardGroup
 
 	RestoreShard(id uint64, r io.Reader) error
 	BackupShard(id uint64, since time.Time, w io.Writer) error
@@ -1436,17 +1408,186 @@ type TSDBStore interface {
 	MeasurementsCardinality(ctx context.Context, database string) (int64, error)
 }
 
-var _ TSDBStore = LocalTSDBStore{}
+var _ TSDBStore = ClusterTSDBStore{}
 
-// LocalTSDBStore embeds a tsdb.Store and implements IteratorCreator
+// ClusterTSDBStore embeds a tsdb.Store and implements cluster tsdb store
 // to satisfy the TSDBStore interface.
-type LocalTSDBStore struct {
+type ClusterTSDBStore struct {
 	*tsdb.Store
+
+	MetaExecutor *MetaExecutor
 }
 
-// ShardIteratorCreator is an interface for creating an IteratorCreator to access a specific shard.
-type ShardIteratorCreator interface {
-	ShardIteratorCreator(id uint64) query.IteratorCreator
+func (s ClusterTSDBStore) DeleteDatabase(name string) error {
+	var g errgroup.Group
+	g.Go(func() error {
+		return s.Store.DeleteDatabase(name)
+	})
+	g.Go(func() error {
+		stmt := &influxql.DropDatabaseStatement{Name: name}
+		return s.MetaExecutor.ExecuteStatement(stmt, "")
+	})
+	return g.Wait()
+}
+
+func (s ClusterTSDBStore) DeleteMeasurement(database, name string) error {
+	var g errgroup.Group
+	g.Go(func() error {
+		return s.Store.DeleteMeasurement(database, name)
+	})
+	g.Go(func() error {
+		stmt := &influxql.DropMeasurementStatement{Name: name}
+		return s.MetaExecutor.ExecuteStatement(stmt, database)
+	})
+	return g.Wait()
+}
+
+func (s ClusterTSDBStore) DeleteRetentionPolicy(database, name string) error {
+	var g errgroup.Group
+	g.Go(func() error {
+		return s.Store.DeleteRetentionPolicy(database, name)
+	})
+	g.Go(func() error {
+		stmt := &influxql.DropRetentionPolicyStatement{Name: name, Database: database}
+		return s.MetaExecutor.ExecuteStatement(stmt, database)
+	})
+	return g.Wait()
+}
+
+func (s ClusterTSDBStore) DeleteSeries(database string, sources []influxql.Source, condition influxql.Expr) error {
+	var g errgroup.Group
+	g.Go(func() error {
+		return s.Store.DeleteSeries(database, sources, condition)
+	})
+	g.Go(func() error {
+		stmt := &influxql.DropSeriesStatement{Sources: sources, Condition: condition}
+		return s.MetaExecutor.ExecuteStatement(stmt, database)
+	})
+	return g.Wait()
+}
+
+func (s ClusterTSDBStore) DeleteShard(id uint64) error {
+	var g errgroup.Group
+	g.Go(func() error {
+		return s.Store.DeleteShard(id)
+	})
+	g.Go(func() error {
+		stmt := &influxql.DropShardStatement{ID: id}
+		return s.MetaExecutor.ExecuteStatement(stmt, "")
+	})
+	return g.Wait()
+}
+
+func (s ClusterTSDBStore) MeasurementNames(ctx context.Context, auth query.FineAuthorizer, database string, cond influxql.Expr) ([][]byte, error) {
+	fn := func() (interface{}, error) {
+		return s.Store.MeasurementNames(ctx, auth, database, cond)
+	}
+	rfn := func(nodeID uint64) (interface{}, error) {
+		return s.MetaExecutor.MeasurementNames(nodeID, database, cond)
+	}
+	results, _ := s.MetaExecutor.ExecuteQuery(fn, rfn)
+
+	var names [][]byte
+	for _, result := range results {
+		entries, ok := result.([][]byte)
+		if !ok {
+			continue
+		}
+		names = append(names, entries...)
+	}
+
+	names = bytesutil.SortDedup(names)
+	return names, nil
+}
+
+func (s ClusterTSDBStore) TagKeys(ctx context.Context, auth query.FineAuthorizer, shardIDs []uint64, cond influxql.Expr) ([]tsdb.TagKeys, error) {
+	fn := func() (interface{}, error) {
+		return s.Store.TagKeys(ctx, auth, shardIDs, cond)
+	}
+	rfn := func(nodeID uint64) (interface{}, error) {
+		return s.MetaExecutor.TagKeys(nodeID, shardIDs, cond)
+	}
+	results, _ := s.MetaExecutor.ExecuteQuery(fn, rfn)
+
+	tagKeysSet := make(map[string]map[string]struct{})
+	for _, result := range results {
+		entries, ok := result.([]tsdb.TagKeys)
+		if !ok {
+			continue
+		}
+		for _, tagKey := range entries {
+			keys, ok := tagKeysSet[tagKey.Measurement]
+			if !ok {
+				keys = make(map[string]struct{})
+			}
+			for _, key := range tagKey.Keys {
+				keys[key] = struct{}{}
+			}
+			tagKeysSet[tagKey.Measurement] = keys
+		}
+	}
+
+	var tagKeys []tsdb.TagKeys
+	for m, keys := range tagKeysSet {
+		tagKey := tsdb.TagKeys{Measurement: m}
+		for key := range keys {
+			tagKey.Keys = append(tagKey.Keys, key)
+		}
+		sort.Sort(sort.StringSlice(tagKey.Keys))
+		tagKeys = append(tagKeys, tagKey)
+	}
+
+	sort.Sort(tsdb.TagKeysSlice(tagKeys))
+	return tagKeys, nil
+}
+
+func (s ClusterTSDBStore) TagValues(ctx context.Context, auth query.FineAuthorizer, shardIDs []uint64, cond influxql.Expr) ([]tsdb.TagValues, error) {
+	fn := func() (interface{}, error) {
+		return s.Store.TagValues(ctx, auth, shardIDs, cond)
+	}
+	rfn := func(nodeID uint64) (interface{}, error) {
+		return s.MetaExecutor.TagValues(nodeID, shardIDs, cond)
+	}
+	results, _ := s.MetaExecutor.ExecuteQuery(fn, rfn)
+
+	tagValuesSet := make(map[string]map[tsdb.KeyValue]struct{})
+	for _, result := range results {
+		entries, ok := result.([]tsdb.TagValues)
+		if !ok {
+			continue
+		}
+		for _, tagValue := range entries {
+			values, ok := tagValuesSet[tagValue.Measurement]
+			if !ok {
+				values = make(map[tsdb.KeyValue]struct{})
+			}
+			for _, value := range tagValue.Values {
+				values[value] = struct{}{}
+			}
+			tagValuesSet[tagValue.Measurement] = values
+		}
+	}
+
+	var tagValues []tsdb.TagValues
+	for m, values := range tagValuesSet {
+		tagValue := tsdb.TagValues{Measurement: m}
+		for value := range values {
+			tagValue.Values = append(tagValue.Values, value)
+		}
+		sort.Sort(tsdb.KeyValues(tagValue.Values))
+		tagValues = append(tagValues, tagValue)
+	}
+
+	sort.Sort(tsdb.TagValuesSlice(tagValues))
+	return tagValues, nil
+}
+
+func (s ClusterTSDBStore) SeriesCardinality(ctx context.Context, database string) (int64, error) {
+	return s.Store.SeriesCardinality(ctx, database)
+}
+
+func (s ClusterTSDBStore) MeasurementsCardinality(ctx context.Context, database string) (int64, error) {
+	return s.Store.MeasurementsCardinality(ctx, database)
 }
 
 // joinUint64 returns a comma-delimited string of uint64 numbers.

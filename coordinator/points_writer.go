@@ -12,6 +12,7 @@ import (
 
 	"github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/models"
+	"github.com/influxdata/influxdb/services/hh"
 	"github.com/influxdata/influxdb/services/meta"
 	"github.com/influxdata/influxdb/tsdb"
 	"go.uber.org/zap"
@@ -70,6 +71,7 @@ type PointsWriter struct {
 
 	HintedHandoff interface {
 		WriteShard(shardID, ownerID uint64, points []models.Point) error
+		Empty(shardID, ownerID uint64) bool
 	}
 
 	Subscriber interface {
@@ -536,6 +538,18 @@ func (w *PointsWriter) writeToShardWithContext(ctx context.Context, shard *meta.
 				return
 			}
 
+			if !w.HintedHandoff.Empty(shardID, owner.NodeID) {
+				atomic.AddInt64(&w.stats.PointWriteReqHH, int64(len(points)))
+				hherr := w.HintedHandoff.WriteShard(shardID, owner.NodeID, points)
+				if hherr != nil {
+					w.Logger.Error("Write shard failed with hinted handoff", zap.Uint64("node_id", owner.NodeID), zap.Uint64("shard_id", shardID), zap.Error(hherr))
+					ch <- &AsyncWriteResult{owner, hherr}
+					return
+				}
+				ch <- &AsyncWriteResult{owner, hh.ErrHintedHandoffQueueNotEmpty}
+				return
+			}
+
 			atomic.AddInt64(&w.stats.PointWriteReqRemote, int64(len(points)))
 			err := w.ShardWriter.WriteShard(shardID, owner.NodeID, points)
 			if err != nil && isRetryable(err) {
@@ -543,6 +557,7 @@ func (w *PointsWriter) writeToShardWithContext(ctx context.Context, shard *meta.
 				atomic.AddInt64(&w.stats.PointWriteReqHH, int64(len(points)))
 				hherr := w.HintedHandoff.WriteShard(shardID, owner.NodeID, points)
 				if hherr != nil {
+					w.Logger.Error("Write shard failed with both shard writer and hinted handoff", zap.Uint64("node_id", owner.NodeID), zap.Uint64("shard_id", shardID), zap.Error(err))
 					ch <- &AsyncWriteResult{owner, hherr}
 					return
 				}
@@ -551,6 +566,7 @@ func (w *PointsWriter) writeToShardWithContext(ctx context.Context, shard *meta.
 				// be considered a successful write so send nil to the response channel
 				// otherwise, let the original error propagate to the response channel
 				if hherr == nil && consistency == models.ConsistencyLevelAny {
+					w.Logger.Warn("Write shard failed while hinted handoff successfully under consistency any", zap.Uint64("node_id", owner.NodeID), zap.Uint64("shard_id", shardID), zap.Error(err))
 					ch <- &AsyncWriteResult{owner, nil}
 					return
 				}
@@ -574,7 +590,7 @@ func (w *PointsWriter) writeToShardWithContext(ctx context.Context, shard *meta.
 			// If the write returned an error, continue to the next response
 			if result.Err != nil {
 				atomic.AddInt64(&w.stats.WriteErr, 1)
-				w.Logger.Info("Write failed", zap.Uint64("shard", shard.ID), zap.Uint64("node", result.Owner.NodeID), zap.Error(result.Err))
+				w.Logger.Error("Write failed", zap.Uint64("node_id", result.Owner.NodeID), zap.Uint64("shard_id", shard.ID), zap.Error(result.Err))
 
 				// Keep track of the first error we see to return back to the client
 				if writeError == nil {
@@ -610,8 +626,7 @@ func isRetryable(err error) bool {
 	if err == nil {
 		return true
 	}
-
-	if strings.Contains(err.Error(), "field type conflict") {
+	if strings.HasPrefix(err.Error(), tsdb.ErrFieldTypeConflict.Error()) {
 		return false
 	}
 	return true

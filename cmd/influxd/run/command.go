@@ -87,17 +87,8 @@ func (cmd *Command) Run(args ...string) error {
 		config.Hostname = options.Hostname
 	}
 
-	// Propagate the top-level hostname down to dependent configs
-	config.Meta.RemoteHostname = config.Hostname
-
-	// Propagate the top-level bind-address down to dependent configs
-	config.Coordinator.RemoteBindAddress = config.BindAddress
-
-	// Propagate the http bind-address down to dependent configs
-	config.Coordinator.RemoteHTTPBindAddress = config.HTTPD.BindAddress
-
-	// Propagate the monitor store-database down to dependent configs
-	config.AntiEntropy.RemoteStoreDatabase = config.Monitor.StoreDatabase
+	// Propagate the top-level gossip-frequency down to dependent configs
+	config.Meta.GossipFrequency = config.GossipFrequency
 
 	// Validate the configuration.
 	if err := config.Validate(); err != nil {

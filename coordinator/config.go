@@ -3,10 +3,12 @@
 package coordinator
 
 import (
+	"crypto/tls"
 	"time"
 
 	"github.com/influxdata/influxdb/monitor/diagnostics"
 	"github.com/influxdata/influxdb/query"
+	"github.com/influxdata/influxdb/tcp"
 	"github.com/influxdata/influxdb/toml"
 )
 
@@ -24,15 +26,8 @@ const (
 	// remains idle in the connection pool.
 	DefaultPoolMaxIdleTime = time.Minute
 
-	// DefaultShardWriterTimeout is the default timeout set on shard writers.
-	DefaultShardWriterTimeout = 5 * time.Second
-
-	// DefaultShardMapperTimeout is the default timeout set on shard mappers.
-	DefaultShardMapperTimeout = 5 * time.Second
-
-	// DefaultMaxRemoteWriteConnections is the maximum number of open connections
-	// that will be available for remote writes to another host.
-	DefaultMaxRemoteWriteConnections = 3
+	// DefaultPoolWaitTimeout is the default timeout waiting for free connection.
+	DefaultPoolWaitTimeout = 5 * time.Second
 
 	// DefaultWriteTimeout is the default timeout for a complete write to succeed.
 	DefaultWriteTimeout = 10 * time.Second
@@ -74,9 +69,8 @@ type Config struct {
 	MaxSelectSeriesN      int           `toml:"max-select-series"`
 	MaxSelectBucketsN     int           `toml:"max-select-buckets"`
 
-	// Propagate the top-level bind-address and http bind-address down to dependent configs
-	RemoteBindAddress     string `toml:"-"`
-	RemoteHTTPBindAddress string `toml:"-"`
+	// TLS is a base tls config to use for tls clients.
+	TLS *tls.Config `toml:"-"`
 }
 
 // NewConfig returns an instance of Config with defaults.
@@ -92,6 +86,16 @@ func NewConfig() Config {
 		MaxSelectSeriesN:     DefaultMaxSelectSeriesN,
 		MaxSelectBucketsN:    DefaultMaxSelectBucketsN,
 	}
+}
+
+// TLSConfig returns a TLS config.
+func (c Config) TLSConfig() (*tls.Config, error) {
+	return tcp.TLSConfig(c.TLS, c.HTTPSEnabled, c.HTTPSCertificate, c.HTTPSPrivateKey)
+}
+
+// TLSClientConfig returns a client TLS config.
+func (c Config) TLSClientConfig() *tls.Config {
+	return tcp.TLSClientConfig(c.HTTPSEnabled, c.HTTPSInsecureTLS)
 }
 
 // Diagnostics returns a diagnostics representation of a subset of the Config.

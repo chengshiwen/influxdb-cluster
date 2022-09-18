@@ -1,13 +1,10 @@
 package update_data
 
 import (
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"strings"
 
@@ -34,40 +31,30 @@ func NewCommand(cOpts *common.Options) *Command {
 // Run executes the program.
 func (cmd *Command) Run(args ...string) error {
 	args, err := cmd.parseFlags(args)
-	if err == flag.ErrHelp {
+	if err != nil {
 		return nil
-	} else if err != nil {
-		return err
 	}
-	if len(args) < 2 {
-		return errors.New("addr value is empty")
+	if len(args) == 0 {
+		return errors.New("old-addr value is empty")
+	} else if len(args) == 1 {
+		return errors.New("new-addr value is empty")
 	} else if len(args) > 2 {
 		return fmt.Errorf("unknown argument: %s", args[2])
 	} else if args[1] == args[0] {
-		return errors.New("new-addr is same as old-addr")
+		return errors.New("new-addr and old-addr are the same")
 	}
 	err = cmd.updateData(args[0], args[1])
 	return common.OperationExitedError(err)
 }
 
-// update data addr.
+// update data node.
 func (cmd *Command) updateData(oldAddr, newAddr string) error {
 	client := common.NewHTTPClient(cmd.cOpts)
-	data := url.Values{"oldAddr": {oldAddr}, "newAddr": {newAddr}}
-	resp, err := client.PostForm("/update-data", data)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return meta.DecodeErrorResponse(resp.Body)
-	}
-
+	defer client.Close()
 	dn := &meta.DataNodeInfo{}
-	if err = json.NewDecoder(resp.Body).Decode(dn); err != nil {
+	if err := client.UpdateData(oldAddr, newAddr, dn); err != nil {
 		return err
 	}
-
 	fmt.Fprintf(cmd.Stdout, "Updated data node %d to %s\n", dn.ID, dn.TCPAddr)
 	return nil
 }

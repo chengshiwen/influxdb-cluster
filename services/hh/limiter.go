@@ -29,12 +29,11 @@ func (t *limiter) Update(count int) {
 // to maintain the configured rate
 func (t *limiter) Delay() time.Duration {
 	if t.limit > 0 {
-
 		delta := time.Now().Sub(t.start).Seconds()
 		rate := int64(float64(t.count) / delta)
 
 		// Determine how far off from the max rate we are
-		delayAdj := float64((t.limit - rate)) / float64(t.limit)
+		delayAdj := float64(t.limit-rate) / float64(t.limit)
 
 		// Don't adjust by more than 1 second at a time
 		delayAdj = t.clamp(delayAdj, -1, 1)

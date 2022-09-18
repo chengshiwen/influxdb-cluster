@@ -233,6 +233,20 @@ func (l *queue) Position() (*queuePos, error) {
 	return qp, nil
 }
 
+// Empty returns true if the queue is empty
+func (l *queue) Empty() bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	if l.head == nil || l.tail == nil || len(l.segments) == 0 {
+		return true
+	}
+	if l.head == l.tail && l.head.pos == l.tail.filePos()-footerSize {
+		return true
+	}
+	return false
+}
+
 // diskUsage returns the total size on disk used by the queue
 func (l *queue) diskUsage() int64 {
 	var size int64

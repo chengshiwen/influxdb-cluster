@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/influxdata/influxdb/services/meta"
 	"github.com/influxdata/influxql"
@@ -20,7 +21,7 @@ func Test_ExecuteStatement(t *testing.T) {
 	mock.expect("DROP DATABASE foo")
 	mock.expect("DROP DATABASE foo")
 
-	e := NewMetaExecutor()
+	e := NewMetaExecutor(time.Duration(0), time.Second)
 	e.MetaClient = newMockMetaClient(numOfNodes)
 	// Replace MetaExecutor's nodeExecutor with our mock.
 	e.nodeExecutor = mock
@@ -61,7 +62,7 @@ func (e *mockExecutor) done() error {
 	return nil
 }
 
-func (e *mockExecutor) executeOnNode(stmt influxql.Statement, database string, node *meta.NodeInfo) error {
+func (e *mockExecutor) executeOnNode(nodeID uint64, stmt influxql.Statement, database string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 

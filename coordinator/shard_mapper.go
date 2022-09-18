@@ -4,15 +4,15 @@ import (
 	"context"
 	"io"
 	"math/rand"
-	"net"
 	"sort"
+	"sync"
 	"time"
 
-	"github.com/influxdata/influxdb/coordinator/rpc"
 	"github.com/influxdata/influxdb/query"
 	"github.com/influxdata/influxdb/services/meta"
 	"github.com/influxdata/influxdb/tsdb"
 	"github.com/influxdata/influxql"
+	"golang.org/x/sync/errgroup"
 )
 
 // IteratorCreator is an interface that combines mapping fields and creating iterators.
@@ -199,7 +199,9 @@ func (a *LocalShardMapping) CreateIterator(ctx context.Context, m *influxql.Meas
 				if err != nil {
 					return err
 				}
-				inputs = append(inputs, input)
+				if input != nil {
+					inputs = append(inputs, input)
+				}
 			}
 			return nil
 		}(); err != nil {
@@ -259,6 +261,8 @@ type ClusterShardMapper struct {
 	TSDBStore interface {
 		ShardGroup(ids []uint64) tsdb.ShardGroup
 	}
+
+	MetaExecutor *MetaExecutor
 }
 
 // MapShards maps the sources to the appropriate shards into an IteratorCreator.
@@ -275,7 +279,10 @@ func (e *ClusterShardMapper) MapShards(sources influxql.Sources, t influxql.Time
 	}
 	a := &ClusterShardMapping{
 		LocalShardMapping: l,
-		RemoteShardMap:    make(map[Source][]*remoteIteratorCreator),
+		RemoteShardMap:    make(map[Source][]*remoteShardGroup),
+		MetaExecutor:      e.MetaExecutor,
+		LocalID:           e.MetaClient.NodeID(),
+		NodeID:            opt.NodeID,
 	}
 
 	tmin := time.Unix(0, t.MinTimeNano())
@@ -285,12 +292,10 @@ func (e *ClusterShardMapper) MapShards(sources influxql.Sources, t influxql.Time
 	}
 	l.MinTime, l.MaxTime = tmin, tmax
 	a.MinTime, a.MaxTime = tmin, tmax
-	a.NodeID = opt.NodeID
 	return a, nil
 }
 
 func (e *ClusterShardMapper) mapShards(a *ClusterShardMapping, sources influxql.Sources, tmin, tmax time.Time) error {
-	localNodeID := e.MetaClient.NodeID()
 	for _, s := range sources {
 		switch s := s.(type) {
 		case *influxql.Measurement:
@@ -314,13 +319,16 @@ func (e *ClusterShardMapper) mapShards(a *ClusterShardMapping, sources influxql.
 				}
 
 				// Map shards to nodes.
-				shardIDsByNodeID := make(map[uint64][]uint64, len(groups[0].Shards)*len(groups))
+				shardsByNodeID := make(map[uint64]shardInfos)
 				if a.NodeID > 0 {
 					// Node to exclusively read from.
 					for _, g := range groups {
 						for _, si := range g.Shards {
 							if si.OwnedBy(a.NodeID) {
-								shardIDsByNodeID[a.NodeID] = append(shardIDsByNodeID[a.NodeID], si.ID)
+								if _, ok := shardsByNodeID[a.NodeID]; !ok {
+									shardsByNodeID[a.NodeID] = make(shardInfos, 0, len(groups))
+								}
+								shardsByNodeID[a.NodeID] = append(shardsByNodeID[a.NodeID], si)
 							}
 						}
 					}
@@ -331,41 +339,48 @@ func (e *ClusterShardMapper) mapShards(a *ClusterShardMapping, sources influxql.
 							// Always assign to local node if it has the shard.
 							// Otherwise randomly select a remote node.
 							var nodeID uint64
-							if si.OwnedBy(localNodeID) {
-								nodeID = localNodeID
+							if si.OwnedBy(a.LocalID) {
+								nodeID = a.LocalID
 							} else if len(si.Owners) > 0 {
-								nodeID = si.Owners[rand.Intn(len(si.Owners))].NodeID
+								// The selected node has higher priority.
+								for _, owner := range si.Owners {
+									if _, ok := shardsByNodeID[owner.NodeID]; ok {
+										nodeID = owner.NodeID
+										break
+									}
+								}
+								// Otherwise randomly select.
+								if nodeID == 0 {
+									nodeID = si.Owners[rand.Intn(len(si.Owners))].NodeID
+								}
 							} else {
 								// This should not occur but if the shard has no owners then
 								// we don't want this to panic by trying to randomly select a node.
 								continue
 							}
-							shardIDsByNodeID[nodeID] = append(shardIDsByNodeID[nodeID], si.ID)
+							if _, ok := shardsByNodeID[nodeID]; !ok {
+								shardsByNodeID[nodeID] = make(shardInfos, 0, len(groups))
+							}
+							shardsByNodeID[nodeID] = append(shardsByNodeID[nodeID], si)
 						}
 					}
 				}
 
 				// Generate shard map for each node.
-				for nodeID, shardIDs := range shardIDsByNodeID {
-					// Sort shard IDs so we get more predicable execution.
-					sort.Sort(uint64Slice(shardIDs))
-
+				for nodeID, shards := range shardsByNodeID {
 					// Record local shard id if local.
-					if nodeID == localNodeID {
-						a.LocalShardMapping.ShardMap[source] = e.TSDBStore.ShardGroup(shardIDs)
+					if nodeID == a.LocalID {
+						a.LocalShardMapping.ShardMap[source] = e.TSDBStore.ShardGroup(shards.shardIDs())
 						continue
 					}
 
-					// Otherwise create iterator creator remotely.
-					dialer := &NodeDialer{
-						MetaClient: e.MetaClient,
-						Timeout:    DefaultShardMapperTimeout,
-					}
-					remoteIC := newRemoteIteratorCreator(dialer, nodeID, shardIDs, a.MinTime, a.MaxTime)
+					// Otherwise create shard group remotely.
+					retry := nodeID != a.NodeID
+					shardGroup := newRemoteShardGroup(a.MetaExecutor, nodeID, shards, retry)
 					if _, ok := a.RemoteShardMap[source]; !ok {
-						a.RemoteShardMap[source] = make([]*remoteIteratorCreator, 0, len(shardIDsByNodeID))
+						a.RemoteShardMap[source] = make([]*remoteShardGroup, 0, len(shardsByNodeID))
 					}
-					a.RemoteShardMap[source] = append(a.RemoteShardMap[source], remoteIC)
+					a.RemoteShardMap[source] = append(a.RemoteShardMap[source], shardGroup)
 				}
 			}
 		case *influxql.SubQuery:
@@ -381,7 +396,9 @@ func (e *ClusterShardMapper) mapShards(a *ClusterShardMapping, sources influxql.
 type ClusterShardMapping struct {
 	LocalShardMapping *LocalShardMapping
 
-	RemoteShardMap map[Source][]*remoteIteratorCreator
+	RemoteShardMap map[Source][]*remoteShardGroup
+
+	MetaExecutor *MetaExecutor
 
 	// MinTime is the minimum time that this shard mapper will allow.
 	// Any attempt to use a time before this one will automatically result in using
@@ -393,6 +410,9 @@ type ClusterShardMapping struct {
 	// this time instead.
 	MaxTime time.Time
 
+	// Node to query locally.
+	LocalID uint64
+
 	// Node to execute on.
 	NodeID uint64
 }
@@ -403,34 +423,52 @@ func (a *ClusterShardMapping) FieldDimensions(m *influxql.Measurement) (fields m
 		RetentionPolicy: m.RetentionPolicy,
 	}
 
-	fields = make(map[string]influxql.DataType)
-	dimensions = make(map[string]struct{})
+	var mu sync.Mutex
+	var g errgroup.Group
+	entries := make([]FieldDimensionsEntry, 0, len(a.RemoteShardMap[source])+1)
 
-	f, d, err := a.LocalShardMapping.FieldDimensions(m)
-	if err != nil {
+	g.Go(func() error {
+		f, d, err := a.LocalShardMapping.FieldDimensions(m)
+		if err != nil {
+			return err
+		}
+		entry := FieldDimensionsEntry{Fields: f, Dimensions: d}
+		mu.Lock()
+		entries = append(entries, entry)
+		mu.Unlock()
+		return nil
+	})
+
+	for _, sg := range a.RemoteShardMap[source] {
+		sg := sg
+		g.Go(func() error {
+			results, err := sg.FieldDimensions(m)
+			if err != nil {
+				return err
+			}
+			if len(results) > 0 {
+				mu.Lock()
+				entries = append(entries, results...)
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
 		return nil, nil, err
 	}
 
-	for k, typ := range f {
-		fields[k] = typ
-	}
-	for k := range d {
-		dimensions[k] = struct{}{}
-	}
-
-	for _, ic := range a.RemoteShardMap[source] {
-		f, d, err := ic.FieldDimensions(m)
-		if err != nil {
-			return nil, nil, err
-		}
-		for k, typ := range f {
+	fields = make(map[string]influxql.DataType)
+	dimensions = make(map[string]struct{})
+	for _, e := range entries {
+		for k, typ := range e.Fields {
 			fields[k] = typ
 		}
-		for k := range d {
+		for k := range e.Dimensions {
 			dimensions[k] = struct{}{}
 		}
 	}
-
 	return
 }
 
@@ -440,9 +478,35 @@ func (a *ClusterShardMapping) MapType(m *influxql.Measurement, field string) inf
 		RetentionPolicy: m.RetentionPolicy,
 	}
 
-	typ := a.LocalShardMapping.MapType(m, field)
-	for _, ic := range a.RemoteShardMap[source] {
-		t := ic.MapType(m, field)
+	var mu sync.Mutex
+	var g errgroup.Group
+	types := make([]influxql.DataType, 0, len(a.RemoteShardMap[source])+1)
+
+	g.Go(func() error {
+		typ := a.LocalShardMapping.MapType(m, field)
+		mu.Lock()
+		types = append(types, typ)
+		mu.Unlock()
+		return nil
+	})
+
+	for _, sg := range a.RemoteShardMap[source] {
+		sg := sg
+		g.Go(func() error {
+			results := sg.MapType(m, field)
+			if len(results) > 0 {
+				mu.Lock()
+				types = append(types, results...)
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+
+	g.Wait()
+
+	var typ influxql.DataType
+	for _, t := range types {
 		if typ.LessThan(t) {
 			typ = t
 		}
@@ -456,20 +520,50 @@ func (a *ClusterShardMapping) CreateIterator(ctx context.Context, m *influxql.Me
 		RetentionPolicy: m.RetentionPolicy,
 	}
 
-	inputs := make([]query.Iterator, 0, len(a.RemoteShardMap[source])+1)
-	input, err := a.LocalShardMapping.CreateIterator(ctx, m, opt)
-	if err != nil {
-		return nil, err
+	// Override the time constraints if they don't match each other.
+	if !a.MinTime.IsZero() && opt.StartTime < a.MinTime.UnixNano() {
+		opt.StartTime = a.MinTime.UnixNano()
 	}
-	inputs = append(inputs, input)
+	if !a.MaxTime.IsZero() && opt.EndTime > a.MaxTime.UnixNano() {
+		opt.EndTime = a.MaxTime.UnixNano()
+	}
 
-	for _, ic := range a.RemoteShardMap[source] {
-		input, err := ic.CreateIterator(ctx, m, opt)
+	var mu sync.Mutex
+	var g errgroup.Group
+	inputs := make([]query.Iterator, 0, len(a.RemoteShardMap[source])+1)
+
+	g.Go(func() error {
+		input, err := a.LocalShardMapping.CreateIterator(ctx, m, opt)
 		if err != nil {
-			query.Iterators(inputs).Close()
-			return nil, err
+			return err
 		}
-		inputs = append(inputs, input)
+		if input != nil {
+			mu.Lock()
+			inputs = append(inputs, input)
+			mu.Unlock()
+		}
+		return nil
+	})
+
+	for _, sg := range a.RemoteShardMap[source] {
+		sg := sg
+		g.Go(func() error {
+			results, err := sg.CreateIterator(ctx, m, opt)
+			if err != nil {
+				return err
+			}
+			if len(results) > 0 {
+				mu.Lock()
+				inputs = append(inputs, results...)
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		query.Iterators(inputs).Close()
+		return nil, err
 	}
 
 	return query.Iterators(inputs).Merge(opt)
@@ -481,231 +575,290 @@ func (a *ClusterShardMapping) IteratorCost(m *influxql.Measurement, opt query.It
 		RetentionPolicy: m.RetentionPolicy,
 	}
 
-	var costs query.IteratorCost
+	// Override the time constraints if they don't match each other.
+	if !a.MinTime.IsZero() && opt.StartTime < a.MinTime.UnixNano() {
+		opt.StartTime = a.MinTime.UnixNano()
+	}
+	if !a.MaxTime.IsZero() && opt.EndTime > a.MaxTime.UnixNano() {
+		opt.EndTime = a.MaxTime.UnixNano()
+	}
 
-	cost, err := a.LocalShardMapping.IteratorCost(m, opt)
-	if err != nil {
+	var mu sync.Mutex
+	var g errgroup.Group
+	costs := make([]query.IteratorCost, 0, len(a.RemoteShardMap[source])+1)
+
+	g.Go(func() error {
+		cost, err := a.LocalShardMapping.IteratorCost(m, opt)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		costs = append(costs, cost)
+		mu.Unlock()
+		return nil
+	})
+
+	for _, sg := range a.RemoteShardMap[source] {
+		sg := sg
+		g.Go(func() error {
+			results, err := sg.IteratorCost(m, opt)
+			if err != nil {
+				return err
+			}
+			if len(results) > 0 {
+				mu.Lock()
+				costs = append(costs, results...)
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
 		return query.IteratorCost{}, err
 	}
-	costs = costs.Combine(cost)
 
-	for _, ic := range a.RemoteShardMap[source] {
-		cost, err := ic.IteratorCost(m, opt)
-		if err != nil {
-			return query.IteratorCost{}, err
-		}
-		costs = costs.Combine(cost)
+	var cost query.IteratorCost
+	for _, c := range costs {
+		cost.Combine(c)
 	}
-
-	return costs, nil
+	return cost, nil
 }
 
 // Close clears out the list of mapped shards.
 func (a *ClusterShardMapping) Close() error {
 	a.LocalShardMapping.Close()
-	for _, ics := range a.RemoteShardMap {
-		for _, ic := range ics {
-			ic.Close()
+	for _, sgs := range a.RemoteShardMap {
+		for _, sg := range sgs {
+			sg.Close()
 		}
 	}
 	a.RemoteShardMap = nil
 	return nil
 }
 
-// remoteIteratorCreator creates iterators for remote shards.
-type remoteIteratorCreator struct {
-	dialer   *NodeDialer
+// remoteShardGroup creates shard groups for remote shards.
+type remoteShardGroup struct {
+	executor *MetaExecutor
 	nodeID   uint64
-	shardIDs []uint64
-	minTime  time.Time
-	maxTime  time.Time
+	shards   shardInfos
+	retry    bool
+	dirty    sync.Map
 }
 
-// newRemoteIteratorCreator returns a new instance of remoteIteratorCreator for a remote shard.
-func newRemoteIteratorCreator(dialer *NodeDialer, nodeID uint64, shardIDs []uint64, minTime, maxTime time.Time) *remoteIteratorCreator {
-	return &remoteIteratorCreator{
-		dialer:   dialer,
+// newRemoteShardGroup returns a new instance of newRemoteShardGroup for remote shards.
+func newRemoteShardGroup(executor *MetaExecutor, nodeID uint64, shards shardInfos, retry bool) *remoteShardGroup {
+	return &remoteShardGroup{
+		executor: executor,
 		nodeID:   nodeID,
-		shardIDs: shardIDs,
-		minTime:  minTime,
-		maxTime:  maxTime,
+		shards:   shards,
+		retry:    retry,
 	}
 }
 
-func (ic *remoteIteratorCreator) FieldDimensions(m *influxql.Measurement) (fields map[string]influxql.DataType, dimensions map[string]struct{}, err error) {
-	conn, err := ic.dialer.DialNode(ic.nodeID)
-	if err != nil {
-		return nil, nil, err
+func (a *remoteShardGroup) shuffleShards() map[uint64]shardInfos {
+	var shardsByNodeID map[uint64]shardInfos
+	for _, si := range a.shards {
+		if len(si.Owners) == 0 {
+			continue
+		}
+		var nodeID uint64
+		if len(shardsByNodeID) > 0 {
+			for _, owner := range si.Owners {
+				if _, ok := shardsByNodeID[owner.NodeID]; ok {
+					nodeID = owner.NodeID
+					break
+				}
+			}
+		}
+		if nodeID == 0 {
+			for _, owner := range si.Owners {
+				if _, ok := a.dirty.Load(owner.NodeID); !ok {
+					nodeID = owner.NodeID
+					break
+				}
+			}
+		}
+		if nodeID == 0 {
+			return nil
+		}
+		if shardsByNodeID == nil {
+			shardsByNodeID = make(map[uint64]shardInfos)
+		}
+		if _, ok := shardsByNodeID[nodeID]; !ok {
+			shardsByNodeID[nodeID] = make(shardInfos, 0, len(a.shards))
+		}
+		shardsByNodeID[nodeID] = append(shardsByNodeID[nodeID], si)
 	}
-	defer conn.Close()
-
-	// Write request.
-	if err := rpc.EncodeTLV(conn, rpc.FieldDimensionsRequestMessage, &rpc.FieldDimensionsRequest{
-		ShardIDs:    ic.shardIDs,
-		Measurement: *m,
-	}); err != nil {
-		return nil, nil, err
-	}
-
-	// Read the response.
-	var resp rpc.FieldDimensionsResponse
-	if _, err := rpc.DecodeTLV(conn, &resp); err != nil {
-		return nil, nil, err
-	}
-	return resp.Fields, resp.Dimensions, resp.Err
+	return shardsByNodeID
 }
 
-func (ic *remoteIteratorCreator) MapType(m *influxql.Measurement, field string) influxql.DataType {
-	conn, err := ic.dialer.DialNode(ic.nodeID)
-	if err != nil {
-		return influxql.Unknown
+func (a *remoteShardGroup) FieldDimensions(m *influxql.Measurement) ([]FieldDimensionsEntry, error) {
+	f, d, err := a.executor.FieldDimensions(a.nodeID, a.shards.shardIDs(), m)
+	if err == nil {
+		return []FieldDimensionsEntry{{Fields: f, Dimensions: d}}, nil
 	}
-	defer conn.Close()
-
-	// Write request.
-	if err := rpc.EncodeTLV(conn, rpc.MapTypeRequestMessage, &rpc.MapTypeRequest{
-		ShardIDs:    ic.shardIDs,
-		Measurement: *m,
-		Field:       field,
-	}); err != nil {
-		return influxql.Unknown
-	}
-
-	// Read the response.
-	var resp rpc.MapTypeResponse
-	if _, err := rpc.DecodeTLV(conn, &resp); err != nil {
-		return influxql.Unknown
-	}
-	return resp.Type
-}
-
-func (ic *remoteIteratorCreator) CreateIterator(ctx context.Context, m *influxql.Measurement, opt query.IteratorOptions) (query.Iterator, error) {
-	conn, err := ic.dialer.DialNode(ic.nodeID)
-	if err != nil {
+	if !a.retry {
 		return nil, err
 	}
-
-	// Override the time constraints if they don't match each other.
-	if !ic.minTime.IsZero() && opt.StartTime < ic.minTime.UnixNano() {
-		opt.StartTime = ic.minTime.UnixNano()
-	}
-	if !ic.maxTime.IsZero() && opt.EndTime > ic.maxTime.UnixNano() {
-		opt.EndTime = ic.maxTime.UnixNano()
-	}
-
-	var resp rpc.CreateIteratorResponse
-	if err := func() error {
-		// Write request.
-		if err := rpc.EncodeTLV(conn, rpc.CreateIteratorRequestMessage, &rpc.CreateIteratorRequest{
-			ShardIDs:    ic.shardIDs,
-			Measurement: *m,
-			Opt:         opt,
-		}); err != nil {
-			return err
+	a.dirty.Store(a.nodeID, struct{}{})
+	for shardsByNodeID := a.shuffleShards(); shardsByNodeID != nil; shardsByNodeID = a.shuffleShards() {
+		var mu sync.Mutex
+		var g errgroup.Group
+		entries := make([]FieldDimensionsEntry, 0, len(shardsByNodeID))
+		for nodeID, shards := range shardsByNodeID {
+			nodeID, shards := nodeID, shards
+			g.Go(func() error {
+				f, d, err := a.executor.FieldDimensions(nodeID, shards.shardIDs(), m)
+				if err != nil {
+					a.dirty.Store(nodeID, struct{}{})
+					return err
+				}
+				entry := FieldDimensionsEntry{Fields: f, Dimensions: d}
+				mu.Lock()
+				entries = append(entries, entry)
+				mu.Unlock()
+				return nil
+			})
 		}
-
-		// Read the response.
-		if _, err := rpc.DecodeTLV(conn, &resp); err != nil {
-			return err
-		} else if resp.Err != nil {
-			return err
+		err = g.Wait()
+		if err == nil {
+			return entries, nil
 		}
+	}
+	return nil, err
+}
 
+func (a *remoteShardGroup) MapType(m *influxql.Measurement, field string) []influxql.DataType {
+	typ, err := a.executor.MapType(a.nodeID, a.shards.shardIDs(), m, field)
+	if err == nil {
+		return []influxql.DataType{typ}
+	}
+	if !a.retry {
 		return nil
-	}(); err != nil {
-		conn.Close()
-		return nil, err
 	}
-
-	return query.NewReaderIterator(ctx, conn, resp.Type, resp.Stats), nil
+	var types []influxql.DataType
+	a.dirty.Store(a.nodeID, struct{}{})
+	for shardsByNodeID := a.shuffleShards(); shardsByNodeID != nil; shardsByNodeID = a.shuffleShards() {
+		var mu sync.Mutex
+		var g errgroup.Group
+		types = make([]influxql.DataType, 0, len(shardsByNodeID))
+		for nodeID, shards := range shardsByNodeID {
+			nodeID, shards := nodeID, shards
+			g.Go(func() error {
+				typ, err := a.executor.MapType(nodeID, shards.shardIDs(), m, field)
+				if err != nil {
+					a.dirty.Store(nodeID, struct{}{})
+					return err
+				}
+				mu.Lock()
+				types = append(types, typ)
+				mu.Unlock()
+				return nil
+			})
+		}
+		err = g.Wait()
+		if err == nil {
+			return types
+		}
+	}
+	return types
 }
 
-func (ic *remoteIteratorCreator) IteratorCost(m *influxql.Measurement, opt query.IteratorOptions) (query.IteratorCost, error) {
-	conn, err := ic.dialer.DialNode(ic.nodeID)
-	if err != nil {
-		return query.IteratorCost{}, err
+func (a *remoteShardGroup) CreateIterator(ctx context.Context, m *influxql.Measurement, opt query.IteratorOptions) ([]query.Iterator, error) {
+	input, err := a.executor.CreateIterator(a.nodeID, a.shards.shardIDs(), ctx, m, opt)
+	if err == nil {
+		return []query.Iterator{input}, nil
 	}
-	defer conn.Close()
-
-	// Override the time constraints if they don't match each other.
-	if !ic.minTime.IsZero() && opt.StartTime < ic.minTime.UnixNano() {
-		opt.StartTime = ic.minTime.UnixNano()
+	if !a.retry {
+		return nil, err
 	}
-	if !ic.maxTime.IsZero() && opt.EndTime > ic.maxTime.UnixNano() {
-		opt.EndTime = ic.maxTime.UnixNano()
+	a.dirty.Store(a.nodeID, struct{}{})
+	for shardsByNodeID := a.shuffleShards(); shardsByNodeID != nil; shardsByNodeID = a.shuffleShards() {
+		var mu sync.Mutex
+		var g errgroup.Group
+		inputs := make([]query.Iterator, 0, len(shardsByNodeID))
+		for nodeID, shards := range shardsByNodeID {
+			nodeID, shards := nodeID, shards
+			g.Go(func() error {
+				input, err := a.executor.CreateIterator(nodeID, shards.shardIDs(), ctx, m, opt)
+				if err != nil {
+					a.dirty.Store(nodeID, struct{}{})
+					return err
+				}
+				mu.Lock()
+				inputs = append(inputs, input)
+				mu.Unlock()
+				return nil
+			})
+		}
+		err = g.Wait()
+		if err == nil {
+			return inputs, nil
+		}
+		query.Iterators(inputs).Close()
 	}
-
-	// Write request.
-	if err := rpc.EncodeTLV(conn, rpc.IteratorCostRequestMessage, &rpc.IteratorCostRequest{
-		ShardIDs:    ic.shardIDs,
-		Measurement: *m,
-		Opt:         opt,
-	}); err != nil {
-		return query.IteratorCost{}, err
-	}
-
-	// Read the response.
-	var resp rpc.IteratorCostResponse
-	if _, err := rpc.DecodeTLV(conn, &resp); err != nil {
-		return query.IteratorCost{}, err
-	}
-	return resp.Cost, resp.Err
+	return nil, err
 }
 
-func (ic *remoteIteratorCreator) ExpandSources(sources influxql.Sources) (influxql.Sources, error) {
-	conn, err := ic.dialer.DialNode(ic.nodeID)
-	if err != nil {
+func (a *remoteShardGroup) IteratorCost(m *influxql.Measurement, opt query.IteratorOptions) ([]query.IteratorCost, error) {
+	cost, err := a.executor.IteratorCost(a.nodeID, a.shards.shardIDs(), m, opt)
+	if err == nil {
+		return []query.IteratorCost{cost}, nil
+	}
+	if !a.retry {
 		return nil, err
 	}
-	defer conn.Close()
-
-	// Write request.
-	if err := rpc.EncodeTLV(conn, rpc.ExpandSourcesRequestMessage, &rpc.ExpandSourcesRequest{
-		ShardIDs: ic.shardIDs,
-		Sources:  sources,
-	}); err != nil {
-		return nil, err
+	a.dirty.Store(a.nodeID, struct{}{})
+	for shardsByNodeID := a.shuffleShards(); shardsByNodeID != nil; shardsByNodeID = a.shuffleShards() {
+		var mu sync.Mutex
+		var g errgroup.Group
+		costs := make([]query.IteratorCost, 0, len(shardsByNodeID))
+		for nodeID, shards := range shardsByNodeID {
+			nodeID, shards := nodeID, shards
+			g.Go(func() error {
+				cost, err := a.executor.IteratorCost(nodeID, shards.shardIDs(), m, opt)
+				if err != nil {
+					a.dirty.Store(nodeID, struct{}{})
+					return err
+				}
+				mu.Lock()
+				costs = append(costs, cost)
+				mu.Unlock()
+				return nil
+			})
+		}
+		err = g.Wait()
+		if err == nil {
+			return costs, nil
+		}
 	}
-
-	// Read the response.
-	var resp rpc.ExpandSourcesResponse
-	if _, err := rpc.DecodeTLV(conn, &resp); err != nil {
-		return nil, err
-	}
-	return resp.Sources, resp.Err
+	return nil, err
 }
 
-func (ic *remoteIteratorCreator) Close() error {
-	ic.shardIDs = nil
+func (a *remoteShardGroup) Close() error {
+	a.shards = nil
 	return nil
 }
 
-// NodeDialer dials connections to a given node.
-type NodeDialer struct {
-	MetaClient MetaClient
-	Timeout    time.Duration
+type FieldDimensionsEntry struct {
+	Fields     map[string]influxql.DataType
+	Dimensions map[string]struct{}
 }
 
-// DialNode returns a connection to a node.
-func (d *NodeDialer) DialNode(nodeID uint64) (net.Conn, error) {
-	ni, err := d.MetaClient.DataNode(nodeID)
-	if err != nil {
-		return nil, err
-	}
+type shardInfos []meta.ShardInfo
 
-	conn, err := net.Dial("tcp", ni.TCPAddr)
-	if err != nil {
-		return nil, err
+func (a shardInfos) shardIDs() []uint64 {
+	var shardIDs []uint64
+	if len(a) > 0 {
+		shardIDs = make([]uint64, 0, len(a))
 	}
-	conn.SetDeadline(time.Now().Add(d.Timeout))
-
-	// Write the cluster multiplexing header byte
-	if _, err := conn.Write([]byte{MuxHeader}); err != nil {
-		conn.Close()
-		return nil, err
+	for _, si := range a {
+		shardIDs = append(shardIDs, si.ID)
 	}
-
-	return conn, nil
+	// Sort shard IDs so we get more predicable execution.
+	sort.Sort(uint64Slice(shardIDs))
+	return shardIDs
 }
 
 type uint64Slice []uint64

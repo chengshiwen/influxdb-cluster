@@ -138,6 +138,8 @@ message Command {
 		DropShardCommand                 = 30;
 		TruncateShardGroupsCommand       = 31;
 		PruneShardGroupsCommand          = 32;
+		CopyShardOwnerCommand            = 33;
+		RemoveShardOwnerCommand          = 34;
 	}
 
 	required Type type = 1;
@@ -409,4 +411,20 @@ message PruneShardGroupsCommand {
 	extend Command {
 		optional PruneShardGroupsCommand command = 132;
 	}
+}
+
+message CopyShardOwnerCommand {
+	extend Command {
+		optional CopyShardOwnerCommand command = 133;
+	}
+	required uint64 ID = 1;
+	required uint64 NodeID = 2;
+}
+
+message RemoveShardOwnerCommand {
+	extend Command {
+		optional RemoveShardOwnerCommand command = 134;
+	}
+	required uint64 ID = 1;
+	required uint64 NodeID = 2;
 }

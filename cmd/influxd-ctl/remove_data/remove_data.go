@@ -5,14 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/influxdata/influxdb/cmd/influxd-ctl/common"
-	"github.com/influxdata/influxdb/services/meta"
 )
 
 // Command represents the program execution for "influxd-ctl remove-data".
@@ -36,10 +32,8 @@ func NewCommand(cOpts *common.Options) *Command {
 // Run executes the program.
 func (cmd *Command) Run(args ...string) error {
 	args, err := cmd.parseFlags(args)
-	if err == flag.ErrHelp {
+	if err != nil {
 		return nil
-	} else if err != nil {
-		return err
 	}
 	if len(args) == 0 {
 		return errors.New("addr value is empty")
@@ -50,19 +44,13 @@ func (cmd *Command) Run(args ...string) error {
 	return common.OperationExitedError(err)
 }
 
-// remove data addr.
+// remove data node.
 func (cmd *Command) removeData(addr string) error {
 	client := common.NewHTTPClient(cmd.cOpts)
-	data := url.Values{"addr": {addr}, "force": {strconv.FormatBool(cmd.force)}}
-	resp, err := client.PostForm("/remove-data", data)
-	if err != nil {
+	defer client.Close()
+	if err := client.RemoveData(addr, cmd.force); err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
-		return meta.DecodeErrorResponse(resp.Body)
-	}
-
 	fmt.Fprintf(cmd.Stdout, "Removed data node at %s\n", addr)
 	return nil
 }

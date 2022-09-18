@@ -80,7 +80,7 @@ func (fsm *storeFSM) Apply(l *raft.Log) interface{} {
 		case internal.Command_CreateMetaNodeCommand:
 			return fsm.applyCreateMetaNodeCommand(&cmd)
 		case internal.Command_DeleteMetaNodeCommand:
-			return fsm.applyDeleteMetaNodeCommand(&cmd, s)
+			return fsm.applyDeleteMetaNodeCommand(&cmd)
 		case internal.Command_SetMetaNodeCommand:
 			return fsm.applySetMetaNodeCommand(&cmd)
 		case internal.Command_CreateDataNodeCommand:
@@ -95,6 +95,10 @@ func (fsm *storeFSM) Apply(l *raft.Log) interface{} {
 			return fsm.applyTruncateShardGroupsCommand(&cmd)
 		case internal.Command_PruneShardGroupsCommand:
 			return fsm.applyPruneShardGroupsCommand(&cmd)
+		case internal.Command_CopyShardOwnerCommand:
+			return fsm.applyCopyShardOwnerCommand(&cmd)
+		case internal.Command_RemoveShardOwnerCommand:
+			return fsm.applyRemoveShardOwnerCommand(&cmd)
 		default:
 			panic(fmt.Errorf("cannot apply command: %x", l.Data))
 		}
@@ -393,6 +397,30 @@ func (fsm *storeFSM) applyPruneShardGroupsCommand(cmd *internal.Command) interfa
 	return nil
 }
 
+func (fsm *storeFSM) applyCopyShardOwnerCommand(cmd *internal.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, internal.E_CopyShardOwnerCommand_Command)
+	v := ext.(*internal.CopyShardOwnerCommand)
+
+	// Copy data and update.
+	other := fsm.data.Clone()
+	other.CopyShardOwner(v.GetID(), v.GetNodeID())
+	fsm.data = other
+
+	return nil
+}
+
+func (fsm *storeFSM) applyRemoveShardOwnerCommand(cmd *internal.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, internal.E_RemoveShardOwnerCommand_Command)
+	v := ext.(*internal.RemoveShardOwnerCommand)
+
+	// Copy data and update.
+	other := fsm.data.Clone()
+	other.RemoveShardOwner(v.GetID(), v.GetNodeID())
+	fsm.data = other
+
+	return nil
+}
+
 func (fsm *storeFSM) applyCreateContinuousQueryCommand(cmd *internal.Command) interface{} {
 	ext, _ := proto.GetExtension(cmd, internal.E_CreateContinuousQueryCommand_Command)
 	v := ext.(*internal.CreateContinuousQueryCommand)
@@ -558,7 +586,7 @@ func (fsm *storeFSM) applySetMetaNodeCommand(cmd *internal.Command) interface{} 
 	return nil
 }
 
-func (fsm *storeFSM) applyDeleteMetaNodeCommand(cmd *internal.Command, s *store) interface{} {
+func (fsm *storeFSM) applyDeleteMetaNodeCommand(cmd *internal.Command) interface{} {
 	ext, _ := proto.GetExtension(cmd, internal.E_DeleteMetaNodeCommand_Command)
 	v := ext.(*internal.DeleteMetaNodeCommand)
 
