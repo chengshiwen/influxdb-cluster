@@ -85,7 +85,7 @@ Setup the project structure and fetch the repo like so:
 ```bash
     mkdir $HOME/gocodez
     export GOPATH=$HOME/gocodez
-    go get github.com/chengshiwen/influxdb-cluster
+    git clone https://github.com/chengshiwen/influxdb-cluster.git
 ```
 
 You can add the line `export GOPATH=$HOME/gocodez` to your bash/zsh file to be set for every shell instead of having to manually run it everytime.
@@ -130,13 +130,13 @@ If you want to build packages, see `build.py` usage information:
 python build.py --help
 
 # Or to run the build utility via Docker
-# bash build.sh --help
+bash build.sh --help
 
 # Or to build a package for your current system
 bash build.sh --package
 
 # Or to build all release packages by specifying the platform, arch, branch and version
-bash build.sh --platform all --arch all --branch master --version 1.8.10-c1.0.0 --clean --release --package
+bash build.sh --platform all --arch all --branch master --version 1.8.10-c1.1.0 --clean --release --package
 ```
 
 To run the tests, execute the following command:
@@ -162,7 +162,7 @@ Build and Push Multi-Arch Docker Images
 To build and push multi-arch docker images, run the following command:
 
 ```bash
-INFLUXDB_VERSION=1.8.10-c1.0.0
+INFLUXDB_VERSION=1.8.10-c1.1.0
 cd docker/data
 docker buildx build --platform linux/amd64,linux/arm64 --build-arg INFLUXDB_VERSION=${INFLUXDB_VERSION} --push -f Dockerfile -t chengshiwen/influxdb:${INFLUXDB_VERSION}-data .
 docker buildx build --platform linux/amd64,linux/arm64 --build-arg INFLUXDB_VERSION=${INFLUXDB_VERSION} --push -f Dockerfile_alpine -t chengshiwen/influxdb:${INFLUXDB_VERSION}-data-alpine .

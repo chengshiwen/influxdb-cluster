@@ -1,3 +1,31 @@
+v1.8.10-c1.1.0 [2022-09-19]
+-------------------
+
+### Features
+
+-	feat(influxd-ctl): support `-auth-type`, `-pwd`, `-secret` and `-user` global options
+-	feat(influxd-ctl): support `copy-shard`, `join`, `leave`, `remove-shard`, `show-shards`, `token` and `truncate-shards` commands
+-	feat(influxd-ctl): remove-data: remove data directory after data node removed
+-	feat(influxd-ctl): remove-meta: remove meta directory after meta node removed
+-	feat(influxd-ctl): show: display `version` column with health check
+-	feat(config): support 19 settings in meta and data node configuration
+-	feat(https): support https and authorization in meta and data node
+-	feat(auth): support jwt and basic authentication in meta and data node
+-	feat(gossip): support gossip announcement in influxd-meta and influxd
+-	feat(query): skip failed nodes that hold a shard needed for queries (if there is a replica on another node, it will retry on that node)
+-	feat(hinted-handoff): refactor hinted handoff to ensure purge data under node/shard/segment directory structure
+-	feat(hinted-handoff): remove hinted handoff queues when data nodes are removed to eliminate manual cleanup tasks
+-	feat(chronograf): compat chronograf access via `/user` and `/role` interface in meta service
+-	feat(pool): improve connection pool in shard writer and meta executor
+
+### Bugfixes
+
+-	fix(influx_inspect): multiple retention policies problem in influx_inspect export [#23197](https://github.com/influxdata/influxdb/pull/23197)
+-	fix(iterator): float, integer, string and boolean iterator finalized by GC
+-	fix(query): `show measurements`, `show tag keys`, `show tag values`, `show field keys` and `show series` only query local data
+-	fix(query): `node_id` not workding in `/query`
+-	fix(hinted-handoff): segment is full
+
 v1.8.10-c1.0.0 [2022-04-20]
 -------------------
 

@@ -17,6 +17,8 @@
 - github.com/golang/protobuf [BSD LICENSE](https://github.com/golang/protobuf/blob/master/LICENSE)
 - github.com/golang/snappy [BSD LICENSE](https://github.com/golang/snappy/blob/master/LICENSE)
 - github.com/google/go-cmp [BSD LICENSE](https://github.com/google/go-cmp/blob/master/LICENSE)
+- github.com/hashicorp/raft [MPL LICENSE](https://github.com/hashicorp/raft/blob/main/LICENSE)
+- github.com/hashicorp/raft-boltdb [MPL LICENSE](https://github.com/hashicorp/raft-boltdb/blob/master/LICENSE)
 - github.com/influxdata/influxql [MIT LICENSE](https://github.com/influxdata/influxql/blob/master/LICENSE)
 - github.com/influxdata/usage-client [MIT LICENSE](https://github.com/influxdata/usage-client/blob/master/LICENSE.txt)
 - github.com/jsternberg/zap-logfmt [MIT LICENSE](https://github.com/jsternberg/zap-logfmt/blob/master/LICENSE)
@@ -43,6 +45,7 @@
 - golang.org/x/sys [BSD LICENSE](https://github.com/golang/sys/blob/master/LICENSE)
 - golang.org/x/text [BSD LICENSE](https://github.com/golang/text/blob/master/LICENSE)
 - golang.org/x/time [BSD LICENSE](https://github.com/golang/time/blob/master/LICENSE)
+- gopkg.in/fatih/pool.v2 [MIT LICENSE](https://github.com/fatih/pool/blob/v2.0.0/LICENSE)
 - jquery 2.1.4 [MIT LICENSE](https://github.com/jquery/jquery/blob/master/LICENSE.txt)
 - github.com/xlab/treeprint [MIT LICENSE](https://github.com/xlab/treeprint/blob/master/LICENSE)
 

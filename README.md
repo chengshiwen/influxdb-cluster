@@ -81,7 +81,7 @@ docker-compose down -v
 ### Create your first database
 
 ```
-curl -XPOST "http://influxdb-data-01:8086/query" --data-urlencode "q=CREATE DATABASE mydb"
+curl -XPOST "http://influxdb-data-01:8086/query" --data-urlencode "q=CREATE DATABASE mydb WITH REPLICATION 2"
 ```
 
 ### Insert some data
