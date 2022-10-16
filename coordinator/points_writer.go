@@ -48,10 +48,11 @@ var (
 
 // PointsWriter handles writes across multiple local and remote data nodes.
 type PointsWriter struct {
-	mu           sync.RWMutex
-	closing      chan struct{}
-	WriteTimeout time.Duration
-	Logger       *zap.Logger
+	mu                    sync.RWMutex
+	closing               chan struct{}
+	AllowOutOfOrderWrites bool
+	WriteTimeout          time.Duration
+	Logger                *zap.Logger
 
 	MetaClient interface {
 		NodeID() uint64
@@ -103,10 +104,11 @@ func (w *WritePointsRequest) AddPoint(name string, value interface{}, timestamp 
 // NewPointsWriter returns a new instance of PointsWriter for a node.
 func NewPointsWriter() *PointsWriter {
 	return &PointsWriter{
-		closing:      make(chan struct{}),
-		WriteTimeout: DefaultWriteTimeout,
-		Logger:       zap.NewNop(),
-		stats:        &WriteStatistics{},
+		closing:               make(chan struct{}),
+		AllowOutOfOrderWrites: false,
+		WriteTimeout:          DefaultWriteTimeout,
+		Logger:                zap.NewNop(),
+		stats:                 &WriteStatistics{},
 	}
 }
 
@@ -538,7 +540,7 @@ func (w *PointsWriter) writeToShardWithContext(ctx context.Context, shard *meta.
 				return
 			}
 
-			if !w.HintedHandoff.Empty(shardID, owner.NodeID) {
+			if !w.AllowOutOfOrderWrites && !w.HintedHandoff.Empty(shardID, owner.NodeID) {
 				atomic.AddInt64(&w.stats.PointWriteReqHH, int64(len(points)))
 				hherr := w.HintedHandoff.WriteShard(shardID, owner.NodeID, points)
 				if hherr != nil {

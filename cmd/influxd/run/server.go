@@ -194,6 +194,7 @@ func NewServer(c *Config, buildInfo *BuildInfo) (*Server, error) {
 
 	// Initialize points writer.
 	s.PointsWriter = coordinator.NewPointsWriter()
+	s.PointsWriter.AllowOutOfOrderWrites = c.Coordinator.AllowOutOfOrderWrites
 	s.PointsWriter.WriteTimeout = time.Duration(c.Coordinator.WriteTimeout)
 	s.PointsWriter.TSDBStore = s.TSDBStore
 	s.PointsWriter.ShardWriter = s.ShardWriter
