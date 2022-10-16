@@ -684,7 +684,7 @@ dir = "/var/lib/influxdb/hh"
 
 # Maximum number of writes into the hinted-handoff queue that can be pending.
 # This is writes incoming to the hh queue, not outbound from the queue.
-# max-pending-writes = 1024
+# max-writes-pending = 1024
 
 ###
 ### [anti-entropy]

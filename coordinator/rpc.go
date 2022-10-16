@@ -47,6 +47,9 @@ func (w *WriteShardRequest) RetentionPolicy() string { return w.pb.GetRetentionP
 // Points returns the time series Points
 func (w *WriteShardRequest) Points() []models.Point { return w.unmarshalPoints() }
 
+// SetBinaryPoints sets the time series binary points
+func (w *WriteShardRequest) SetBinaryPoints(points [][]byte) { w.pb.Points = points }
+
 // AddPoint adds a new time series point
 func (w *WriteShardRequest) AddPoint(name string, value interface{}, timestamp time.Time, tags map[string]string) {
 	pt, err := models.NewPoint(

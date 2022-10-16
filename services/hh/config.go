@@ -99,6 +99,9 @@ func (c *Config) Validate() error {
 	if c.PurgeInterval <= 0 {
 		return errors.New("purge-interval must be positive")
 	}
+	if c.MaxWritesPending < 0 {
+		return errors.New("max-writes-pending must be non-negative")
+	}
 
 	return nil
 }

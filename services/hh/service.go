@@ -62,7 +62,7 @@ type Service struct {
 }
 
 type shardWriter interface {
-	WriteShard(shardID, ownerID uint64, points []models.Point) error
+	WriteShardBinary(shardID, ownerID uint64, points [][]byte) error
 }
 
 type metaClient interface {
@@ -124,6 +124,14 @@ func (s *Service) Statistics(tags map[string]string) []models.Statistic {
 	for _, processors := range s.processors {
 		for _, p := range processors {
 			statistics = append(statistics, p.Statistics(nil)...)
+		}
+	}
+	for key := range statistics[0].Values {
+		if key == statWriteShardReq || key == statWriteShardReqPoints {
+			continue
+		}
+		for i := 1; i < len(statistics); i++ {
+			statistics[0].Values[key] = statistics[0].Values[key].(int64) + statistics[i].Values[key].(int64)
 		}
 	}
 	return statistics

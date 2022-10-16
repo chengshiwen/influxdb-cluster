@@ -40,6 +40,19 @@ func NewShardWriter(timeout, dialTimeout, idleTimeout time.Duration, maxIdleStre
 
 // WriteShard writes time series points to a shard
 func (w *ShardWriter) WriteShard(shardID, ownerID uint64, points []models.Point) error {
+	pts := make([][]byte, 0, len(points))
+	for _, p := range points {
+		b, err := p.MarshalBinary()
+		if err != nil {
+			continue
+		}
+		pts = append(pts, b)
+	}
+	return w.WriteShardBinary(shardID, ownerID, pts)
+}
+
+// WriteShardBinary writes time series binary points to a shard
+func (w *ShardWriter) WriteShardBinary(shardID, ownerID uint64, points [][]byte) error {
 	c, err := w.dial(ownerID)
 	if err != nil {
 		return err
@@ -67,7 +80,7 @@ func (w *ShardWriter) WriteShard(shardID, ownerID uint64, points []models.Point)
 	request.SetShardID(shardID)
 	request.SetDatabase(db)
 	request.SetRetentionPolicy(rp)
-	request.AddPoints(points)
+	request.SetBinaryPoints(points)
 
 	// Marshal into protocol buffers.
 	buf, err := request.MarshalBinary()

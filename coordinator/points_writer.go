@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -554,7 +553,7 @@ func (w *PointsWriter) writeToShardWithContext(ctx context.Context, shard *meta.
 
 			atomic.AddInt64(&w.stats.PointWriteReqRemote, int64(len(points)))
 			err := w.ShardWriter.WriteShard(shardID, owner.NodeID, points)
-			if err != nil && isRetryable(err) {
+			if err != nil && hh.IsRetryable(err) {
 				// The remote write failed so queue it via hinted handoff
 				atomic.AddInt64(&w.stats.PointWriteReqHH, int64(len(points)))
 				hherr := w.HintedHandoff.WriteShard(shardID, owner.NodeID, points)
@@ -594,6 +593,10 @@ func (w *PointsWriter) writeToShardWithContext(ctx context.Context, shard *meta.
 				atomic.AddInt64(&w.stats.WriteErr, 1)
 				w.Logger.Error("Write failed", zap.Uint64("node_id", result.Owner.NodeID), zap.Uint64("shard_id", shard.ID), zap.Error(result.Err))
 
+				if result.Err.Error() == hh.ErrQueueBlocked.Error() {
+					continue
+				}
+
 				// Keep track of the first error we see to return back to the client
 				if writeError == nil {
 					writeError = result.Err
@@ -621,15 +624,4 @@ func (w *PointsWriter) writeToShardWithContext(ctx context.Context, shard *meta.
 	}
 
 	return ErrWriteFailed
-}
-
-// isRetryable returns true if this error is temporary and could be retried
-func isRetryable(err error) bool {
-	if err == nil {
-		return true
-	}
-	if strings.HasPrefix(err.Error(), tsdb.ErrFieldTypeConflict.Error()) {
-		return false
-	}
-	return true
 }

@@ -4,6 +4,7 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,10 +13,10 @@ import (
 )
 
 type fakeShardWriter struct {
-	ShardWriteFn func(shardID, nodeID uint64, points []models.Point) error
+	ShardWriteFn func(shardID, nodeID uint64, points [][]byte) error
 }
 
-func (f *fakeShardWriter) WriteShard(shardID, nodeID uint64, points []models.Point) error {
+func (f *fakeShardWriter) WriteShardBinary(shardID, nodeID uint64, points [][]byte) error {
 	return f.ShardWriteFn(shardID, nodeID, points)
 }
 
@@ -38,7 +39,7 @@ func TestNodeProcessorSendBlock(t *testing.T) {
 	pt := models.MustNewPoint("cpu", models.NewTags(map[string]string{"foo": "bar"}), models.Fields{"value": 1.0}, time.Unix(0, 0))
 
 	sh := &fakeShardWriter{
-		ShardWriteFn: func(shardID, nodeID uint64, points []models.Point) error {
+		ShardWriteFn: func(shardID, nodeID uint64, points [][]byte) error {
 			count++
 			if shardID != expShardID {
 				t.Errorf("SendWrite() shardID mismatch: got %v, exp %v", shardID, expShardID)
@@ -51,8 +52,13 @@ func TestNodeProcessorSendBlock(t *testing.T) {
 				t.Fatalf("SendWrite() points mismatch: got %v, exp %v", len(points), exp)
 			}
 
-			if points[0].String() != pt.String() {
-				t.Fatalf("SendWrite() points mismatch:\n got %v\n exp %v", points[0].String(), pt.String())
+			p, err := models.NewPointFromBytes(points[0])
+			if err != nil {
+				t.Fatalf("SendWrite() point bytes mismatch: got %v, exp %v", err, pt.String())
+			}
+
+			if p.String() != pt.String() {
+				t.Fatalf("SendWrite() points mismatch:\n got %v\n exp %v", p.String(), pt.String())
 			}
 
 			return nil
@@ -110,7 +116,7 @@ func TestNodeProcessorSendBlock(t *testing.T) {
 	}
 
 	// Make the node inactive.
-	sh.ShardWriteFn = func(shardID, nodeID uint64, points []models.Point) error {
+	sh.ShardWriteFn = func(shardID, nodeID uint64, points [][]byte) error {
 		t.Fatalf("write sent to inactive node")
 		return nil
 	}
@@ -151,5 +157,34 @@ func TestNodeProcessorSendBlock(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("Node processor directory still present after purge")
+	}
+}
+
+func TestNodeProcessorMarshalWrite(t *testing.T) {
+	expShardID := uint64(127)
+	expPointsStr := `cpu value1=1.0,value2=1.0,value3=3.0,value4=4,value5="five" 1000000000
+cpu,env=prod,host=serverA,region=us-west,tag1=value1,tag2=value2,tag3=value3,tag4=value4,tag5=value5,target=servers,zone=1c value=1i 1000000000`
+	points, _ := models.ParsePointsString(expPointsStr)
+	b := marshalWrite(expShardID, points)
+
+	shardID, pts, err := unmarshalWrite(b)
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	if shardID != expShardID {
+		t.Fatalf("unexpected shardID: %d, exp: %d", shardID, expShardID)
+	}
+
+	var lines []string
+	for _, pt := range pts {
+		p, err := models.NewPointFromBytes(pt)
+		if err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		lines = append(lines, p.String())
+	}
+	pointsStr := strings.Join(lines, "\n")
+	if pointsStr != expPointsStr {
+		t.Fatalf("unexpected points string: %s, exp: %s", pointsStr, expPointsStr)
 	}
 }

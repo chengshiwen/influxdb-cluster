@@ -17,7 +17,7 @@ func BenchmarkQueueAppend(b *testing.B) {
 	}
 	defer os.RemoveAll(dir)
 
-	q, err := newQueue(dir, 1024*1024*1024)
+	q, err := newQueue(dir, 1024*1024*1024, 1024)
 	if err != nil {
 		b.Fatalf("failed to create queue: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestQueueAppendOne(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	q, err := newQueue(dir, 1024)
+	q, err := newQueue(dir, 1024, 1024)
 	if err != nil {
 		t.Fatalf("failed to create queue: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestQueueAppendMultiple(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	q, err := newQueue(dir, 1024)
+	q, err := newQueue(dir, 1024, 1024)
 	if err != nil {
 		t.Fatalf("failed to create queue: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestQueueAdvancePastEnd(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	// create the queue
-	q, err := newQueue(dir, 1024)
+	q, err := newQueue(dir, 1024, 1024)
 	if err != nil {
 		t.Fatalf("failed to create queue: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestQueueFull(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	// create the queue
-	q, err := newQueue(dir, 10)
+	q, err := newQueue(dir, 10, 1024)
 	if err != nil {
 		t.Fatalf("failed to create queue: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestQueueReopen(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	// create the queue
-	q, err := newQueue(dir, 1024)
+	q, err := newQueue(dir, 1024, 1024)
 	if err != nil {
 		t.Fatalf("failed to create queue: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestPurgeQueue(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	// create the queue
-	q, err := newQueue(dir, 1024)
+	q, err := newQueue(dir, 1024, 1024)
 	if err != nil {
 		t.Fatalf("failed to create queue: %v", err)
 	}

@@ -1,9 +1,11 @@
 package hh
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,6 +22,7 @@ type NodeProcessor struct {
 	RetryInterval    time.Duration // Interval between periodic write-to-node attempts.
 	RetryMaxInterval time.Duration // Max interval between periodic write-to-node attempts.
 	RetryRateLimit   int64         // Limits the rate data is sent to node.
+	MaxWritesPending int           // Maximum number of incoming pending writes.
 	MaxSize          int64         // Maximum size an underlying queue can get.
 	MaxAge           time.Duration // Maximum age queue data can get before purging.
 	nodeID           uint64
@@ -47,6 +50,7 @@ func NewNodeProcessor(cfg Config, nodeID, shardID uint64, dir string, w shardWri
 		RetryInterval:    time.Duration(cfg.RetryInterval),
 		RetryMaxInterval: time.Duration(cfg.RetryMaxInterval),
 		RetryRateLimit:   cfg.RetryRateLimit,
+		MaxWritesPending: cfg.MaxWritesPending,
 		MaxSize:          cfg.MaxSize,
 		MaxAge:           time.Duration(cfg.MaxAge),
 		nodeID:           nodeID,
@@ -84,7 +88,7 @@ func (n *NodeProcessor) Open() error {
 	}
 
 	// Create the queue of hinted-handoff data.
-	queue, err := newQueue(n.dir, n.MaxSize)
+	queue, err := newQueue(n.dir, n.MaxSize, n.MaxWritesPending)
 	if err != nil {
 		return err
 	}
@@ -126,7 +130,7 @@ func (n *NodeProcessor) Statistics(tags map[string]string) []models.Statistic {
 			statBytesRead:           atomic.LoadInt64(&n.stats.BytesRead),
 			statBytesWritten:        atomic.LoadInt64(&n.stats.BytesWritten),
 			statQueueBytes:          n.queue.diskUsage(),
-			statQueueDepth:          len(n.queue.segments),
+			statQueueDepth:          int64(len(n.queue.segments)),
 			statWriteBlocked:        atomic.LoadInt64(&n.stats.WriteBlocked),
 			statWriteDropped:        atomic.LoadInt64(&n.stats.WriteDropped),
 			statWriteShardReq:       atomic.LoadInt64(&n.stats.WriteShardReq),
@@ -166,16 +170,22 @@ func (n *NodeProcessor) WriteShard(points []models.Point) error {
 
 	i, j := 0, len(points)
 	for i < j {
-		b := marshalWrite(points[i:j])
+		b := marshalWrite(n.shardID, points[i:j])
 		for len(b) > defaultSegmentSize {
 			if j == i+1 {
 				return ErrSegmentFull
 			}
 			j = (i + j + 1) / 2
-			b = marshalWrite(points[i:j])
+			b = marshalWrite(n.shardID, points[i:j])
 		}
 		atomic.AddInt64(&n.stats.BytesWritten, int64(len(b)))
 		if err := n.queue.Append(b); err != nil {
+			switch err {
+			case ErrQueueBlocked:
+				atomic.AddInt64(&n.stats.WriteBlocked, 1)
+			case ErrQueueFull:
+				atomic.AddInt64(&n.stats.WriteDropped, 1)
+			}
 			return err
 		}
 		if j == len(points) {
@@ -263,14 +273,25 @@ func (n *NodeProcessor) SendWrite() (int, error) {
 	// Get the current block from the queue
 	buf, err := n.queue.Current()
 	if err != nil {
+		if err != io.EOF {
+			n.Logger.Error("Failed to current queue", zap.Uint64("node", n.nodeID), zap.Uint64("shardID", n.shardID), zap.Error(err))
+			// Try to truncate it.
+			if err := n.queue.Truncate(); err != nil {
+				n.Logger.Error("Failed to truncate queue", zap.Uint64("node", n.nodeID), zap.Uint64("shardID", n.shardID), zap.Error(err))
+			}
+		} else {
+			// Try to skip it.
+			if err := n.queue.Advance(); err != nil {
+				n.Logger.Error("Failed to advance queue", zap.Uint64("node", n.nodeID), zap.Uint64("shardID", n.shardID), zap.Error(err))
+			}
+		}
 		return 0, err
 	}
 
 	// unmarshal the byte slice back to shard ID and points
-	points, err := unmarshalWrite(buf)
+	_, points, err := unmarshalWrite(buf)
 	if err != nil {
-		atomic.AddInt64(&n.stats.WriteDropped, int64(len(buf)))
-		n.Logger.Error("Unmarshal write failed", zap.Error(err))
+		n.Logger.Error("Unmarshal write failed", zap.Uint64("node", n.nodeID), zap.Uint64("shardID", n.shardID), zap.Error(err))
 		// Try to skip it.
 		if err := n.queue.Advance(); err != nil {
 			n.Logger.Error("Failed to advance queue", zap.Uint64("node", n.nodeID), zap.Uint64("shardID", n.shardID), zap.Error(err))
@@ -278,10 +299,11 @@ func (n *NodeProcessor) SendWrite() (int, error) {
 		return 0, err
 	}
 
-	if err := n.writer.WriteShard(n.shardID, n.nodeID, points); err != nil {
+	if err := n.writer.WriteShardBinary(n.shardID, n.nodeID, points); err != nil && IsRetryable(err) {
 		atomic.AddInt64(&n.stats.WriteNodeReqFail, 1)
 		return 0, err
 	}
+	atomic.AddInt64(&n.stats.BytesRead, int64(len(buf)))
 	atomic.AddInt64(&n.stats.WriteNodeReq, 1)
 	atomic.AddInt64(&n.stats.WriteNodeReqPoints, int64(len(points)))
 
@@ -324,21 +346,50 @@ func (n *NodeProcessor) Empty() bool {
 	return n.queue.Empty()
 }
 
-func marshalWrite(points []models.Point) []byte {
-	var b []byte
-	if len(points) > 0 {
-		b = make([]byte, 0, (len(points[0].String())+1)*len(points))
+// IsRetryable returns true if this error is temporary and could be retried
+func IsRetryable(err error) bool {
+	if err == nil {
+		return false
 	}
+	if strings.Contains(err.Error(), "field type conflict") || strings.Contains(err.Error(), "partial write") {
+		return false
+	}
+	return true
+}
+
+func marshalWrite(shardID uint64, points []models.Point) []byte {
+	b := make([]byte, 8)
+	binary.BigEndian.PutUint64(b, shardID)
+	nb := make([]byte, 4)
 	for _, p := range points {
-		b = append(b, []byte(p.String())...)
-		b = append(b, '\n')
+		pb, err := p.MarshalBinary()
+		if err != nil {
+			continue
+		}
+		binary.BigEndian.PutUint32(nb, uint32(len(pb)))
+		b = append(b, nb...)
+		b = append(b, pb...)
 	}
 	return b
 }
 
-func unmarshalWrite(b []byte) ([]models.Point, error) {
-	if len(b) == 0 {
-		return nil, fmt.Errorf("too short: zero")
+func unmarshalWrite(b []byte) (uint64, [][]byte, error) {
+	if len(b) < 8 {
+		return 0, nil, fmt.Errorf("too short: len = %d", len(b))
 	}
-	return models.ParsePoints(b)
+	shardID, b := binary.BigEndian.Uint64(b[:8]), b[8:]
+	var points [][]byte
+	var n int
+	for len(b) > 0 {
+		if len(b) < 4 {
+			return shardID, points, io.ErrShortBuffer
+		}
+		n, b = int(binary.BigEndian.Uint32(b[:4])), b[4:]
+		if len(b) < n {
+			return shardID, points, io.ErrShortBuffer
+		}
+		points = append(points, b[:n])
+		b = b[n:]
+	}
+	return shardID, points, nil
 }

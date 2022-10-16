@@ -1,22 +1,27 @@
 package hh
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
+
+	limit "github.com/influxdata/influxdb/pkg/limiter"
 )
 
 // Possible errors returned by a hinted handoff queue.
 var (
-	ErrNotOpen     = fmt.Errorf("queue not open")
-	ErrQueueFull   = fmt.Errorf("queue is full")
-	ErrSegmentFull = fmt.Errorf("segment is full")
+	ErrNotOpen      = fmt.Errorf("queue not open")
+	ErrQueueBlocked = fmt.Errorf("queue is blocked")
+	ErrQueueFull    = fmt.Errorf("queue is full")
+	ErrSegmentFull  = fmt.Errorf("segment is full")
 )
 
 const (
@@ -70,9 +75,13 @@ type queue struct {
 	// an error
 	maxSize int64
 
+	// The limiter of incoming pending writes allowed in the queue
+	limiter limit.Fixed
+
 	// The segments that exist on disk
 	segments segments
 }
+
 type queuePos struct {
 	head string
 	tail string
@@ -80,13 +89,18 @@ type queuePos struct {
 
 type segments []*segment
 
+func (a segments) Len() int           { return len(a) }
+func (a segments) Less(i, j int) bool { return a[i].id < a[j].id }
+func (a segments) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+
 // newQueue create a queue that will store segments in dir and that will
 // consume more than maxSize on disk.
-func newQueue(dir string, maxSize int64) (*queue, error) {
+func newQueue(dir string, maxSize int64, maxWrites int) (*queue, error) {
 	return &queue{
 		dir:            dir,
 		maxSegmentSize: defaultSegmentSize,
 		maxSize:        maxSize,
+		limiter:        limit.NewFixed(maxWrites),
 		segments:       segments{},
 	}, nil
 }
@@ -263,7 +277,7 @@ func (l *queue) addSegment() (*segment, error) {
 		return nil, err
 	}
 
-	segment, err := newSegment(filepath.Join(l.dir, strconv.FormatUint(nextID, 10)), l.maxSegmentSize)
+	segment, err := newSegment(nextID, l.dir, l.maxSegmentSize)
 	if err != nil {
 		return nil, err
 	}
@@ -274,7 +288,7 @@ func (l *queue) addSegment() (*segment, error) {
 
 // loadSegments loads all segments on disk
 func (l *queue) loadSegments() (segments, error) {
-	segments := []*segment{}
+	var segments segments
 
 	files, err := ioutil.ReadDir(l.dir)
 	if err != nil {
@@ -288,18 +302,19 @@ func (l *queue) loadSegments() (segments, error) {
 		}
 
 		// Segments file names are all numeric
-		_, err := strconv.ParseUint(segment.Name(), 10, 64)
+		id, err := strconv.ParseUint(segment.Name(), 10, 64)
 		if err != nil {
 			continue
 		}
 
-		segment, err := newSegment(filepath.Join(l.dir, segment.Name()), l.maxSegmentSize)
+		segment, err := newSegment(id, l.dir, l.maxSegmentSize)
 		if err != nil {
 			return segments, err
 		}
 
 		segments = append(segments, segment)
 	}
+	sort.Sort(segments)
 	return segments, nil
 }
 
@@ -333,6 +348,11 @@ func (l *queue) nextSegmentID() (uint64, error) {
 
 // Append appends a byte slice to the end of the queue
 func (l *queue) Append(b []byte) error {
+	if !l.limiter.TryTake() {
+		return ErrQueueBlocked
+	}
+	defer l.limiter.Release()
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -344,15 +364,26 @@ func (l *queue) Append(b []byte) error {
 		return ErrQueueFull
 	}
 
+	buffered := len(l.limiter) >= 10
+	defer func() {
+		if buffered && len(l.limiter) <= 1 {
+			l.tail.mu.Lock()
+			defer l.tail.mu.Unlock()
+			l.tail.flush()
+		}
+	}()
+
 	// Append the entry to the tail, if the segment is full,
 	// try to create new segment and retry the append
-	if err := l.tail.append(b); err == ErrSegmentFull {
+	if err := l.tail.append(b, buffered); err == ErrSegmentFull {
 		segment, err := l.addSegment()
 		if err != nil {
 			return err
 		}
 		l.tail = segment
-		return l.tail.append(b)
+		return l.tail.append(b, buffered)
+	} else if err != nil {
+		return err
 	}
 	return nil
 }
@@ -364,6 +395,15 @@ func (l *queue) Current() ([]byte, error) {
 	}
 
 	return l.head.current()
+}
+
+// Truncate truncates the corrupt block in a corrupted segment to minimize data loss
+func (l *queue) Truncate() error {
+	if l.head == nil {
+		return ErrNotOpen
+	}
+
+	return l.head.truncate()
 }
 
 // Advance moves the head point to the next byte slice in the queue
@@ -421,6 +461,8 @@ func (l *queue) trimHead() error {
 type segment struct {
 	mu sync.RWMutex
 
+	id   uint64
+	buf  *bytes.Buffer
 	size int64
 	file *os.File
 	path string
@@ -430,7 +472,8 @@ type segment struct {
 	maxSize     int64
 }
 
-func newSegment(path string, maxSize int64) (*segment, error) {
+func newSegment(id uint64, dir string, maxSize int64) (*segment, error) {
+	path := filepath.Join(dir, strconv.FormatUint(id, 10))
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
@@ -441,10 +484,12 @@ func newSegment(path string, maxSize int64) (*segment, error) {
 		return nil, err
 	}
 
-	s := &segment{file: f, path: path, size: stats.Size(), maxSize: maxSize}
+	s := &segment{id: id, file: f, path: path, size: stats.Size(), maxSize: maxSize}
 
 	if err := s.open(); err != nil {
-		return nil, err
+		if err := s.truncate(); err != nil && err != io.EOF {
+			return nil, err
+		}
 	}
 
 	return s, nil
@@ -484,6 +529,7 @@ func (l *segment) open() error {
 	l.pos = int64(pos)
 
 	if err := l.seekToCurrent(); err != nil {
+		l.pos = 0
 		return err
 	}
 
@@ -501,7 +547,7 @@ func (l *segment) open() error {
 }
 
 // append adds byte slice to the end of segment
-func (l *segment) append(b []byte) error {
+func (l *segment) append(b []byte, buffered bool) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -509,23 +555,54 @@ func (l *segment) append(b []byte) error {
 		return ErrNotOpen
 	}
 
-	if l.size+int64(len(b)) > l.maxSize {
+	if l.buf == nil {
+		l.buf = &bytes.Buffer{}
+	}
+
+	if l.size+int64(l.buf.Len())+int64(len(b)) > l.maxSize {
+		if err := l.flush(); err != nil {
+			return err
+		}
 		return ErrSegmentFull
+	}
+
+	if err := binary.Write(l.buf, binary.BigEndian, uint64(len(b))); err != nil {
+		return err
+	}
+
+	if _, err := l.buf.Write(b); err != nil {
+		return err
+	}
+
+	if !buffered {
+		if err := l.flush(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// flush flushes byte slice to the end of segment
+func (l *segment) flush() error {
+	if l.buf == nil {
+		return nil
+	}
+	b := l.buf.Bytes()
+	if len(b) == 0 {
+		return nil
 	}
 
 	if err := l.seekEnd(-footerSize); err != nil {
 		return err
 	}
 
-	if err := l.writeUint64(uint64(len(b))); err != nil {
+	buf := bytes.NewBuffer(b)
+	if err := binary.Write(buf, binary.BigEndian, uint64(l.pos)); err != nil {
 		return err
 	}
 
-	if err := l.writeBytes(b); err != nil {
-		return err
-	}
-
-	if err := l.writeUint64(uint64(l.pos)); err != nil {
+	if err := l.writeBytes(buf.Bytes()); err != nil {
 		return err
 	}
 
@@ -534,10 +611,11 @@ func (l *segment) append(b []byte) error {
 	}
 
 	if l.currentSize == 0 {
-		l.currentSize = int64(len(b))
+		l.currentSize = int64(binary.BigEndian.Uint64(b[:8]))
 	}
 
-	l.size += int64(len(b)) + 8 // uint64 for slice length
+	l.size += int64(len(b))
+	l.buf = nil
 
 	return nil
 }
@@ -547,7 +625,7 @@ func (l *segment) current() ([]byte, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if int64(l.pos) == l.size-8 {
+	if int64(l.pos) == l.size-footerSize {
 		return nil, io.EOF
 	}
 
@@ -572,6 +650,38 @@ func (l *segment) current() ([]byte, error) {
 	}
 
 	return b, nil
+}
+
+// truncate truncates the corrupt block in a corrupted segment
+func (l *segment) truncate() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if int64(l.pos) == l.size-footerSize {
+		return io.EOF
+	}
+
+	if err := l.seekToCurrent(); err != nil {
+		return err
+	}
+
+	if err := l.writeUint64(uint64(l.pos)); err != nil {
+		return err
+	}
+
+	size := int64(l.pos) + footerSize
+	if err := l.file.Truncate(size); err != nil {
+		return err
+	}
+
+	if err := l.file.Sync(); err != nil {
+		return err
+	}
+
+	l.currentSize = 0
+	l.size = size
+
+	return nil
 }
 
 // advance advances the current value pointer
@@ -659,7 +769,7 @@ func (l *segment) seekToCurrent() error {
 }
 
 func (l *segment) seek(pos int64) error {
-	n, err := l.file.Seek(pos, os.SEEK_SET)
+	n, err := l.file.Seek(pos, io.SeekStart)
 	if err != nil {
 		return err
 	}
@@ -672,7 +782,7 @@ func (l *segment) seek(pos int64) error {
 }
 
 func (l *segment) seekEnd(pos int64) error {
-	_, err := l.file.Seek(pos, os.SEEK_END)
+	_, err := l.file.Seek(pos, io.SeekEnd)
 	if err != nil {
 		return err
 	}
@@ -681,7 +791,7 @@ func (l *segment) seekEnd(pos int64) error {
 }
 
 func (l *segment) filePos() int64 {
-	n, _ := l.file.Seek(0, os.SEEK_CUR)
+	n, _ := l.file.Seek(0, io.SeekCurrent)
 	return n
 }
 
