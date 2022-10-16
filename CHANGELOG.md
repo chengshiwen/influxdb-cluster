@@ -1,3 +1,24 @@
+v1.8.10-c1.1.1 [2022-10-16]
+-------------------
+
+### Features
+
+-	feat(config): support `allow-out-of-order-writes` and `max-writes-pending` in data node configuration
+-	chore: update raft to v1.3.11
+
+### Bugfixes
+
+-	fix(meta-handler): announcement concurrent map iteration and map write in meta handler
+-	fix(hinted-handoff): optimize the load order of segments in hh
+-	fix(hinted-handoff): optimize marshalWrite and unmarshalWrite in node processor
+-	fix(hinted-handoff): do not queue partial write errors to hinted handoff
+-	fix(hinted-handoff): prevent the hinted handoff from becoming blocked if it encounters field type errors
+-	fix(hinted-handoff): fix issue where read bytes, blocked writes and dropped writes were not recorded in hh
+-	fix(hinted-handoff): ensure the hinted handoff (hh) queue makes forward progress when segment errors occur
+-	fix(hinted-handoff): verify and truncate the queue segment files if any are corrupted upon node startup
+-	fix(hinted-handoff): improve hinted handoff metrics
+-	fix(hinted-handoff): append bytes to buffer in hh queue to avoid OOM
+
 v1.8.10-c1.1.0 [2022-09-19]
 -------------------
 
