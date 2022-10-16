@@ -18,7 +18,7 @@ require (
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/snappy v0.0.0-20180518054509-2e65f85255db
 	github.com/google/go-cmp v0.4.0
-	github.com/hashicorp/raft v1.3.10
+	github.com/hashicorp/raft v1.3.11
 	github.com/hashicorp/raft-boltdb/v2 v2.2.2
 	github.com/influxdata/flux v0.65.1
 	github.com/influxdata/influxql v1.1.1-0.20200828144457-65d3ef77d385
