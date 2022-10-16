@@ -1,6 +1,7 @@
 package meta
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -2237,18 +2238,28 @@ const (
 	NodeStatusDisjoined = "disjoined"
 )
 
-type Announcement struct {
-	TCPAddr    string                   `json:"tcpAddr"`
-	HTTPAddr   string                   `json:"httpAddr"`
-	HTTPScheme string                   `json:"httpScheme"`
-	Time       time.Time                `json:"time"`
-	NodeType   string                   `json:"nodeType"`
-	Status     string                   `json:"status"`
-	Context    map[string]Announcements `json:"context"`
-	Version    string                   `json:"version"`
+type Announcements map[string]*Announcement
+
+func (a *Announcements) MarshalBinary() ([]byte, error) {
+	return json.Marshal(a)
 }
 
-type Announcements map[string]*Announcement
+func (a *Announcements) UnmarshalBinary(buf []byte) error {
+	return json.Unmarshal(buf, a)
+}
+
+type Announcement struct {
+	TCPAddr    string    `json:"tcpAddr"`
+	HTTPAddr   string    `json:"httpAddr"`
+	HTTPScheme string    `json:"httpScheme"`
+	Time       time.Time `json:"time"`
+	NodeType   string    `json:"nodeType"`
+	Status     string    `json:"status"`
+	Context    Context   `json:"context"`
+	Version    string    `json:"version"`
+}
+
+type Context map[string]json.RawMessage
 
 type DataNodeStatus struct {
 	NodeType   string   `json:"nodeType"`

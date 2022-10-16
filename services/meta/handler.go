@@ -1052,12 +1052,15 @@ func (h *handler) serveAnnounce(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if context != nil {
-		if announcements, ok := context["gossip"]; ok {
-			for _, ann := range announcements {
-				if ann.TCPAddr != h.s.RaftAddr() {
-					h.mu.Lock()
-					h.announcements[ann.TCPAddr] = ann
-					h.mu.Unlock()
+		if message, ok := context["gossip"]; ok {
+			var announcements Announcements
+			if err := announcements.UnmarshalBinary(message); err == nil {
+				for _, ann := range announcements {
+					if ann.TCPAddr != h.s.RaftAddr() {
+						h.mu.Lock()
+						h.announcements[ann.TCPAddr] = ann
+						h.mu.Unlock()
+					}
 				}
 			}
 		}
@@ -1082,12 +1085,12 @@ func (h *handler) announce() {
 			if len(metaServers) == 0 {
 				continue
 			}
-			var context map[string]Announcements
+			var context Context
 			h.mu.RLock()
 			if len(h.announcements) > 0 {
-				context = map[string]Announcements{"gossip": h.announcements}
+				message, _ := h.announcements.MarshalBinary()
+				context = Context{"gossip": message}
 			}
-			h.mu.RUnlock()
 			announcement := &Announcement{
 				TCPAddr:    h.s.RaftAddr(),
 				HTTPAddr:   h.s.HTTPAddr(),
@@ -1099,6 +1102,7 @@ func (h *handler) announce() {
 				Version:    h.s.Version,
 			}
 			data, _ := json.Marshal(announcement)
+			h.mu.RUnlock()
 			idx := rand.Intn(len(metaServers))
 			uri := fmt.Sprintf("%s://%s/announce", h.s.HTTPScheme(), metaServers[idx])
 			resp, err := h.client.PostJSON(uri, bytes.NewBuffer(data))
