@@ -28,6 +28,7 @@ const (
 	footerSize         = 8
 )
 
+/*
 // queue is a bounded, disk-backed, append-only type that combines queue and
 // log semantics.  byte slices can be appended and read back in-order.
 // The queue maintains a pointer to the current head
@@ -57,6 +58,7 @@ const (
 //                                                     ┌─────┐
 //                                                     │Tail │
 //                                                     └─────┘
+*/
 type queue struct {
 	mu sync.RWMutex
 

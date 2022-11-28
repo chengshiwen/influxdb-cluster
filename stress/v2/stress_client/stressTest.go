@@ -160,7 +160,7 @@ func (st *StressTest) GetStatementResults(sID, t string) (res []influx.Result) {
 	return st.queryTestResults(qryStr)
 }
 
-//  Runs given qry on the test results database and returns the results or nil in case of error
+// Runs given qry on the test results database and returns the results or nil in case of error
 func (st *StressTest) queryTestResults(qry string) (res []influx.Result) {
 	response, err := st.ResultsClient.Query(influx.Query{Command: qry, Database: st.TestDB})
 	if err == nil {

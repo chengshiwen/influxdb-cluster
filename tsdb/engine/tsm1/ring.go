@@ -30,7 +30,6 @@ const partitions = 16
 //
 // To determine the partition that a series key should be added to, the series
 // key is hashed and the first 8 bits are used as an index to the ring.
-//
 type ring struct {
 	// Number of keys within the ring. This is used to provide a hint for
 	// allocating the return values in keys(). It will not be perfectly accurate
@@ -47,8 +46,7 @@ type ring struct {
 // power of 2, and for performance reasons should be larger than the number of
 // cores on the host. The supported set of values for n is:
 //
-//     {1, 2, 4, 8, 16}.
-//
+//	{1, 2, 4, 8, 16}.
 func newring(n int) (*ring, error) {
 	if n <= 0 || n > partitions {
 		return nil, fmt.Errorf("invalid number of partitions: %d", n)

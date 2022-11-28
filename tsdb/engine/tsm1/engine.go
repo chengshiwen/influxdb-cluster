@@ -1289,7 +1289,6 @@ func (e *Engine) addToIndexFromKey(keys [][]byte, fieldTypes []influxql.DataType
 //
 // TODO: We should consider obsolteing and removing this function in favor of
 // WritePointsWithContext()
-//
 func (e *Engine) WritePoints(points []models.Point) error {
 	return e.WritePointsWithContext(context.Background(), points)
 }
@@ -1303,7 +1302,6 @@ func (e *Engine) WritePoints(points []models.Point) error {
 //
 // It expects int64 pointers to be stored in the tsdb.StatPointsWritten and
 // tsdb.StatValuesWritten keys and will store the proper values if requested.
-//
 func (e *Engine) WritePointsWithContext(ctx context.Context, points []models.Point) error {
 	values := make(map[string][]Value, len(points))
 	var (

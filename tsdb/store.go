@@ -1191,7 +1191,6 @@ func (s *Store) sketchesForDatabase(dbName string, getSketches func(*Shard) (est
 //
 // Cardinality is calculated exactly by unioning all shards' bitsets of series
 // IDs. The result of this method cannot be combined with any other results.
-//
 func (s *Store) SeriesCardinality(ctx context.Context, database string) (int64, error) {
 	s.mu.RLock()
 	shards := s.filterShards(byDatabase(database))
@@ -1969,7 +1968,6 @@ func (s *Store) TagValues(ctx context.Context, auth query.FineAuthorizer, shardI
 //
 // TODO(edd): a Tournament based merge (see: Knuth's TAOCP 5.4.1) might be more
 // appropriate at some point.
-//
 func mergeTagValues(valueIdxs [][2]int, tvs ...tagValues) TagValues {
 	var result TagValues
 	if len(tvs) == 0 {

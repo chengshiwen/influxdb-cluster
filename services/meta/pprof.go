@@ -31,11 +31,11 @@ func (h *handler) handleProfiles(w http.ResponseWriter, r *http.Request) {
 }
 
 // archiveProfiles collects the following profiles:
-//	- goroutine profile
-//	- heap profile
-//	- blocking profile
-//	- mutex profile
-//	- (optionally) CPU profile
+//   - goroutine profile
+//   - heap profile
+//   - blocking profile
+//   - mutex profile
+//   - (optionally) CPU profile
 //
 // All information is added to a tar archive and then compressed, before being
 // returned to the requester as an archive file. Where profiles support debug
@@ -50,7 +50,6 @@ func (h *handler) handleProfiles(w http.ResponseWriter, r *http.Request) {
 //
 // The value after the `cpu` query parameter is not actually important, as long
 // as there is something there.
-//
 func (h *handler) archiveProfiles(w http.ResponseWriter, r *http.Request) {
 	// prof describes a profile name and a debug value, or in the case of a CPU
 	// profile, the number of seconds to collect the profile for.

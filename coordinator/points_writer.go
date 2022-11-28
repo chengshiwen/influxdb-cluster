@@ -292,8 +292,8 @@ func (l sgList) Covers(t time.Time) bool {
 // to start time. Therefore, if there are multiple shard groups that match
 // this point's time they will be preferred in this order:
 //
-//  - a shard group with the earliest end time;
-//  - (assuming identical end times) the shard group with the earliest start time.
+//   - a shard group with the earliest end time;
+//   - (assuming identical end times) the shard group with the earliest start time.
 func (l sgList) ShardGroupAt(t time.Time) *meta.ShardGroupInfo {
 	if l.items.Len() == 0 {
 		return nil
@@ -372,7 +372,6 @@ const (
 )
 
 // WritePointsWithContext writes data to the underlying storage. consitencyLevel and user are only used for clustered scenarios.
-//
 func (w *PointsWriter) WritePointsWithContext(ctx context.Context, database, retentionPolicy string, consistencyLevel models.ConsistencyLevel, user meta.User, points []models.Point) error {
 	return w.WritePointsPrivilegedWithContext(ctx, database, retentionPolicy, consistencyLevel, points)
 }
@@ -387,7 +386,6 @@ func (w *PointsWriter) WritePointsPrivileged(database, retentionPolicy string, c
 // If a request for StatPointsWritten or StatValuesWritten of type ContextKey is
 // sent via context values, this stores the total points and fields written in
 // the memory pointed to by the associated wth the int64 pointers.
-//
 func (w *PointsWriter) WritePointsPrivilegedWithContext(ctx context.Context, database, retentionPolicy string, consistencyLevel models.ConsistencyLevel, points []models.Point) error {
 	atomic.AddInt64(&w.stats.WriteReq, 1)
 	atomic.AddInt64(&w.stats.PointWriteReq, int64(len(points)))

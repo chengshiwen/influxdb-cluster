@@ -60,7 +60,7 @@ func TestTimer_Elapsed(t *testing.T) {
 	}
 }
 
-/// basic.go
+// basic.go
 
 // Types are off
 func Test_typeArr(t *testing.T) {
@@ -415,7 +415,7 @@ func TestBasicQueryClient_Query(t *testing.T) {
 
 }
 
-/// config.go
+// config.go
 func Test_NewConfigWithFile(t *testing.T) {
 	c, err := NewConfig("stress.toml")
 	if err != nil {
@@ -590,5 +590,5 @@ func Test_NewConfigWithoutFile(t *testing.T) {
 	}
 }
 
-/// run.go
+// run.go
 // TODO
