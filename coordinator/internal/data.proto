@@ -23,6 +23,15 @@ message ExecuteStatementResponse {
     optional string Message = 2;
 }
 
+message TaskManagerStatementRequest {
+    required string Statement = 1;
+}
+
+message TaskManagerStatementResponse {
+    required bytes  Result = 1;
+    optional string Err    = 2;
+}
+
 message MeasurementNamesRequest {
     required string Database  = 1;
     optional string Condition = 2;
@@ -53,28 +62,49 @@ message TagValuesResponse {
     optional string Err       = 2;
 }
 
-message SeriesCardinalityRequest {
+message SeriesSketchesRequest {
     required string Database = 1;
 }
 
-message SeriesCardinalityResponse {
-    required int64  Cardinality = 1;
-    optional string Err         = 2;
+message SeriesSketchesResponse {
+    required bytes  Sketch   = 1;
+    required bytes  TSSketch = 2;
+    optional string Err      = 3;
 }
 
-message MeasurementsCardinalityRequest {
+message MeasurementsSketchesRequest {
     required string Database = 1;
 }
 
-message MeasurementsCardinalityResponse {
-    required int64  Cardinality = 1;
-    optional string Err         = 2;
+message MeasurementsSketchesResponse {
+    required bytes  Sketch   = 1;
+    required bytes  TSSketch = 2;
+    optional string Err      = 3;
+}
+
+message StoreReadFilterRequest {
+    repeated uint64 ShardIDs = 1;
+    required bytes  Request  = 2;
+}
+
+message StoreReadFilterResponse {
+    optional string Err = 1;
+}
+
+message StoreReadGroupRequest {
+    repeated uint64 ShardIDs = 1;
+    required bytes  Request  = 2;
+}
+
+message StoreReadGroupResponse {
+    optional string Err = 1;
 }
 
 message CreateIteratorRequest {
     repeated uint64 ShardIDs    = 1;
     required bytes  Measurement = 2;
     required bytes  Opt         = 3;
+    optional bytes  SpanContext = 4;
 }
 
 message CreateIteratorResponse {

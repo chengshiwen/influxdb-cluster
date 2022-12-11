@@ -10,6 +10,8 @@ import (
 
 	"github.com/influxdata/influxdb/query"
 	"github.com/influxdata/influxdb/services/meta"
+	"github.com/influxdata/influxdb/storage/reads"
+	"github.com/influxdata/influxdb/storage/reads/datatypes"
 	"github.com/influxdata/influxdb/tsdb"
 	"github.com/influxdata/influxql"
 	"golang.org/x/sync/errgroup"
@@ -278,11 +280,11 @@ func (e *ClusterShardMapper) MapShards(sources influxql.Sources, t influxql.Time
 		ShardMap: make(map[Source]tsdb.ShardGroup),
 	}
 	a := &ClusterShardMapping{
-		LocalShardMapping: l,
-		RemoteShardMap:    make(map[Source][]*remoteShardGroup),
-		MetaExecutor:      e.MetaExecutor,
-		LocalID:           e.MetaClient.NodeID(),
-		NodeID:            opt.NodeID,
+		LocalShardMapping:  l,
+		RemoteShardMapping: make(map[Source][]*remoteShardGroup),
+		MetaExecutor:       e.MetaExecutor,
+		LocalID:            e.MetaClient.NodeID(),
+		NodeID:             opt.NodeID,
 	}
 
 	tmin := time.Unix(0, t.MinTimeNano())
@@ -306,7 +308,7 @@ func (e *ClusterShardMapper) mapShards(a *ClusterShardMapping, sources influxql.
 			// Retrieve the list of shards for this database. This list of
 			// shards is always the same regardless of which measurement we are
 			// using.
-			if _, ok := a.RemoteShardMap[source]; !ok {
+			if _, ok := a.RemoteShardMapping[source]; !ok {
 				groups, err := e.MetaClient.ShardGroupsByTimeRange(s.Database, s.RetentionPolicy, tmin, tmax)
 				if err != nil {
 					return err
@@ -314,7 +316,7 @@ func (e *ClusterShardMapper) mapShards(a *ClusterShardMapping, sources influxql.
 
 				if len(groups) == 0 {
 					a.LocalShardMapping.ShardMap[source] = nil
-					a.RemoteShardMap[source] = nil
+					a.RemoteShardMapping[source] = nil
 					continue
 				}
 
@@ -377,10 +379,10 @@ func (e *ClusterShardMapper) mapShards(a *ClusterShardMapping, sources influxql.
 					// Otherwise create shard group remotely.
 					retry := nodeID != a.NodeID
 					shardGroup := newRemoteShardGroup(a.MetaExecutor, nodeID, shards, retry)
-					if _, ok := a.RemoteShardMap[source]; !ok {
-						a.RemoteShardMap[source] = make([]*remoteShardGroup, 0, len(shardsByNodeID))
+					if _, ok := a.RemoteShardMapping[source]; !ok {
+						a.RemoteShardMapping[source] = make([]*remoteShardGroup, 0, len(shardsByNodeID))
 					}
-					a.RemoteShardMap[source] = append(a.RemoteShardMap[source], shardGroup)
+					a.RemoteShardMapping[source] = append(a.RemoteShardMapping[source], shardGroup)
 				}
 			}
 		case *influxql.SubQuery:
@@ -396,7 +398,7 @@ func (e *ClusterShardMapper) mapShards(a *ClusterShardMapping, sources influxql.
 type ClusterShardMapping struct {
 	LocalShardMapping *LocalShardMapping
 
-	RemoteShardMap map[Source][]*remoteShardGroup
+	RemoteShardMapping map[Source][]*remoteShardGroup
 
 	MetaExecutor *MetaExecutor
 
@@ -425,7 +427,7 @@ func (a *ClusterShardMapping) FieldDimensions(m *influxql.Measurement) (fields m
 
 	var mu sync.Mutex
 	var g errgroup.Group
-	entries := make([]FieldDimensionsEntry, 0, len(a.RemoteShardMap[source])+1)
+	entries := make([]FieldDimensionsEntry, 0, len(a.RemoteShardMapping[source])+1)
 
 	g.Go(func() error {
 		f, d, err := a.LocalShardMapping.FieldDimensions(m)
@@ -439,7 +441,7 @@ func (a *ClusterShardMapping) FieldDimensions(m *influxql.Measurement) (fields m
 		return nil
 	})
 
-	for _, sg := range a.RemoteShardMap[source] {
+	for _, sg := range a.RemoteShardMapping[source] {
 		sg := sg
 		g.Go(func() error {
 			results, err := sg.FieldDimensions(m)
@@ -480,7 +482,7 @@ func (a *ClusterShardMapping) MapType(m *influxql.Measurement, field string) inf
 
 	var mu sync.Mutex
 	var g errgroup.Group
-	types := make([]influxql.DataType, 0, len(a.RemoteShardMap[source])+1)
+	types := make([]influxql.DataType, 0, len(a.RemoteShardMapping[source])+1)
 
 	g.Go(func() error {
 		typ := a.LocalShardMapping.MapType(m, field)
@@ -490,7 +492,7 @@ func (a *ClusterShardMapping) MapType(m *influxql.Measurement, field string) inf
 		return nil
 	})
 
-	for _, sg := range a.RemoteShardMap[source] {
+	for _, sg := range a.RemoteShardMapping[source] {
 		sg := sg
 		g.Go(func() error {
 			results := sg.MapType(m, field)
@@ -530,7 +532,7 @@ func (a *ClusterShardMapping) CreateIterator(ctx context.Context, m *influxql.Me
 
 	var mu sync.Mutex
 	var g errgroup.Group
-	inputs := make([]query.Iterator, 0, len(a.RemoteShardMap[source])+1)
+	inputs := make([]query.Iterator, 0, len(a.RemoteShardMapping[source])+1)
 
 	g.Go(func() error {
 		input, err := a.LocalShardMapping.CreateIterator(ctx, m, opt)
@@ -545,7 +547,7 @@ func (a *ClusterShardMapping) CreateIterator(ctx context.Context, m *influxql.Me
 		return nil
 	})
 
-	for _, sg := range a.RemoteShardMap[source] {
+	for _, sg := range a.RemoteShardMapping[source] {
 		sg := sg
 		g.Go(func() error {
 			results, err := sg.CreateIterator(ctx, m, opt)
@@ -585,7 +587,7 @@ func (a *ClusterShardMapping) IteratorCost(m *influxql.Measurement, opt query.It
 
 	var mu sync.Mutex
 	var g errgroup.Group
-	costs := make([]query.IteratorCost, 0, len(a.RemoteShardMap[source])+1)
+	costs := make([]query.IteratorCost, 0, len(a.RemoteShardMapping[source])+1)
 
 	g.Go(func() error {
 		cost, err := a.LocalShardMapping.IteratorCost(m, opt)
@@ -598,7 +600,7 @@ func (a *ClusterShardMapping) IteratorCost(m *influxql.Measurement, opt query.It
 		return nil
 	})
 
-	for _, sg := range a.RemoteShardMap[source] {
+	for _, sg := range a.RemoteShardMapping[source] {
 		sg := sg
 		g.Go(func() error {
 			results, err := sg.IteratorCost(m, opt)
@@ -620,7 +622,7 @@ func (a *ClusterShardMapping) IteratorCost(m *influxql.Measurement, opt query.It
 
 	var cost query.IteratorCost
 	for _, c := range costs {
-		cost.Combine(c)
+		cost = cost.Combine(c)
 	}
 	return cost, nil
 }
@@ -628,13 +630,245 @@ func (a *ClusterShardMapping) IteratorCost(m *influxql.Measurement, opt query.It
 // Close clears out the list of mapped shards.
 func (a *ClusterShardMapping) Close() error {
 	a.LocalShardMapping.Close()
-	for _, sgs := range a.RemoteShardMap {
+	for _, sgs := range a.RemoteShardMapping {
 		for _, sg := range sgs {
 			sg.Close()
 		}
 	}
-	a.RemoteShardMap = nil
+	a.RemoteShardMapping = nil
 	return nil
+}
+
+// Store describes the behaviour of the storage packages Store type.
+type Store interface {
+	ReadFilter(ctx context.Context, req *datatypes.ReadFilterRequest) (reads.ResultSet, error)
+	ReadGroup(ctx context.Context, req *datatypes.ReadGroupRequest) (reads.GroupResultSet, error)
+}
+
+// ClusterStoreMapper implements a StoreMapper for cluster store.
+type ClusterStoreMapper struct {
+	MetaClient interface {
+		NodeID() uint64
+		ShardGroupsByTimeRange(database, policy string, min, max time.Time) (a []meta.ShardGroupInfo, err error)
+	}
+
+	MetaExecutor *MetaExecutor
+}
+
+// MapShards maps the sources to the appropriate shards into an Store.
+func (e *ClusterStoreMapper) MapShards(database, rp string, start, end int64, nodeID uint64, cursorFn func(ctx context.Context, shardIDs []uint64) (reads.SeriesCursor, error)) (Store, error) {
+	groups, err := e.MetaClient.ShardGroupsByTimeRange(database, rp, time.Unix(0, start), time.Unix(0, end))
+	if err != nil {
+		return nil, err
+	}
+
+	if len(groups) == 0 {
+		return nil, nil
+	}
+
+	a := &ClusterStoreMapping{
+		CursorFn: cursorFn,
+		LocalID:  e.MetaClient.NodeID(),
+		NodeID:   nodeID,
+	}
+
+	if err := e.mapShards(a, groups); err != nil {
+		return nil, err
+	}
+	return a, nil
+}
+
+func (e *ClusterStoreMapper) mapShards(a *ClusterStoreMapping, groups []meta.ShardGroupInfo) error {
+	// Map shards to nodes.
+	shardsByNodeID := make(map[uint64]shardInfos)
+	if a.NodeID > 0 {
+		// Node to exclusively read from.
+		for _, g := range groups {
+			for _, si := range g.Shards {
+				if si.OwnedBy(a.NodeID) {
+					if _, ok := shardsByNodeID[a.NodeID]; !ok {
+						shardsByNodeID[a.NodeID] = make(shardInfos, 0, len(groups))
+					}
+					shardsByNodeID[a.NodeID] = append(shardsByNodeID[a.NodeID], si)
+				}
+			}
+		}
+	} else {
+		// If zero, all nodes are used.
+		for _, g := range groups {
+			for _, si := range g.Shards {
+				// Always assign to local node if it has the shard.
+				// Otherwise randomly select a remote node.
+				var nodeID uint64
+				if si.OwnedBy(a.LocalID) {
+					nodeID = a.LocalID
+				} else if len(si.Owners) > 0 {
+					// The selected node has higher priority.
+					for _, owner := range si.Owners {
+						if _, ok := shardsByNodeID[owner.NodeID]; ok {
+							nodeID = owner.NodeID
+							break
+						}
+					}
+					// Otherwise randomly select.
+					if nodeID == 0 {
+						nodeID = si.Owners[rand.Intn(len(si.Owners))].NodeID
+					}
+				} else {
+					// This should not occur but if the shard has no owners then
+					// we don't want this to panic by trying to randomly select a node.
+					continue
+				}
+				if _, ok := shardsByNodeID[nodeID]; !ok {
+					shardsByNodeID[nodeID] = make(shardInfos, 0, len(groups))
+				}
+				shardsByNodeID[nodeID] = append(shardsByNodeID[nodeID], si)
+			}
+		}
+	}
+
+	// Generate shard map for each node.
+	for nodeID, shards := range shardsByNodeID {
+		// Record local shard id if local.
+		if nodeID == a.LocalID {
+			a.LocalShardIDs = shards.shardIDs()
+			continue
+		}
+
+		// Otherwise create shard group remotely.
+		retry := nodeID != a.NodeID
+		shardGroup := newRemoteShardGroup(e.MetaExecutor, nodeID, shards, retry)
+		a.RemoteShardGroups = append(a.RemoteShardGroups, shardGroup)
+	}
+	return nil
+}
+
+// ClusterStoreMapping maps nodes to a list of shard information.
+type ClusterStoreMapping struct {
+	LocalShardIDs []uint64
+
+	RemoteShardGroups []*remoteShardGroup
+
+	CursorFn func(ctx context.Context, shardIDs []uint64) (reads.SeriesCursor, error)
+
+	// Node to query locally.
+	LocalID uint64
+
+	// Node to execute on.
+	NodeID uint64
+}
+
+func (a *ClusterStoreMapping) ReadFilter(ctx context.Context, req *datatypes.ReadFilterRequest) (reads.ResultSet, error) {
+	if len(a.LocalShardIDs) == 0 && len(a.RemoteShardGroups) == 0 {
+		return nil, nil
+	}
+
+	var mu sync.Mutex
+	var g errgroup.Group
+	rss := make([]reads.ResultSet, 0, len(a.RemoteShardGroups)+1)
+
+	g.Go(func() error {
+		if len(a.LocalShardIDs) == 0 || a.CursorFn == nil {
+			return nil
+		}
+		cur, err := a.CursorFn(ctx, a.LocalShardIDs)
+		if err != nil {
+			return err
+		} else if cur == nil {
+			return nil
+		}
+
+		rs := reads.NewFilteredResultSet(ctx, req, cur)
+		mu.Lock()
+		rss = append(rss, rs)
+		mu.Unlock()
+		return nil
+	})
+
+	for _, sg := range a.RemoteShardGroups {
+		sg := sg
+		g.Go(func() error {
+			results, err := sg.ReadFilter(ctx, req)
+			if err != nil {
+				return err
+			}
+			if len(results) > 0 {
+				mu.Lock()
+				rss = append(rss, results...)
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		for _, rs := range rss {
+			rs.Close()
+		}
+		return nil, err
+	}
+
+	return reads.NewMergedResultSet(rss), nil
+}
+
+func (a *ClusterStoreMapping) ReadGroup(ctx context.Context, req *datatypes.ReadGroupRequest) (reads.GroupResultSet, error) {
+	if len(a.LocalShardIDs) == 0 && len(a.RemoteShardGroups) == 0 {
+		return nil, nil
+	}
+
+	var mu sync.Mutex
+	var g errgroup.Group
+	rss := make([]reads.GroupResultSet, 0, len(a.RemoteShardGroups)+1)
+
+	g.Go(func() error {
+		if len(a.LocalShardIDs) == 0 || a.CursorFn == nil {
+			return nil
+		}
+		newCursor := func() (reads.SeriesCursor, error) {
+			return a.CursorFn(ctx, a.LocalShardIDs)
+		}
+
+		rs := reads.NewGroupResultSet(ctx, req, newCursor)
+		if rs == nil {
+			return nil
+		}
+		mu.Lock()
+		rss = append(rss, rs)
+		mu.Unlock()
+		return nil
+	})
+
+	for _, sg := range a.RemoteShardGroups {
+		sg := sg
+		g.Go(func() error {
+			results, err := sg.ReadGroup(ctx, req)
+			if err != nil {
+				return err
+			}
+			if len(results) > 0 {
+				mu.Lock()
+				rss = append(rss, results...)
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		for _, rs := range rss {
+			rs.Close()
+		}
+		return nil, err
+	}
+
+	switch req.Group {
+	case datatypes.GroupBy:
+		return reads.NewGroupByMergedGroupResultSet(rss), nil
+	case datatypes.GroupNone:
+		return reads.NewGroupNoneMergedGroupResultSet(rss), nil
+	default:
+		panic("not implemented")
+	}
 }
 
 // remoteShardGroup creates shard groups for remote shards.
@@ -831,6 +1065,82 @@ func (a *remoteShardGroup) IteratorCost(m *influxql.Measurement, opt query.Itera
 		err = g.Wait()
 		if err == nil {
 			return costs, nil
+		}
+	}
+	return nil, err
+}
+
+func (a *remoteShardGroup) ReadFilter(ctx context.Context, req *datatypes.ReadFilterRequest) ([]reads.ResultSet, error) {
+	rs, err := a.executor.ReadFilter(a.nodeID, a.shards.shardIDs(), ctx, req)
+	if err == nil {
+		return []reads.ResultSet{rs}, nil
+	}
+	if !a.retry {
+		return nil, err
+	}
+	a.dirty.Store(a.nodeID, struct{}{})
+	for shardsByNodeID := a.shuffleShards(); shardsByNodeID != nil; shardsByNodeID = a.shuffleShards() {
+		var mu sync.Mutex
+		var g errgroup.Group
+		rss := make([]reads.ResultSet, 0, len(shardsByNodeID))
+		for nodeID, shards := range shardsByNodeID {
+			nodeID, shards := nodeID, shards
+			g.Go(func() error {
+				input, err := a.executor.ReadFilter(nodeID, shards.shardIDs(), ctx, req)
+				if err != nil {
+					a.dirty.Store(nodeID, struct{}{})
+					return err
+				}
+				mu.Lock()
+				rss = append(rss, input)
+				mu.Unlock()
+				return nil
+			})
+		}
+		err = g.Wait()
+		if err == nil {
+			return rss, nil
+		}
+		for _, rs := range rss {
+			rs.Close()
+		}
+	}
+	return nil, err
+}
+
+func (a *remoteShardGroup) ReadGroup(ctx context.Context, req *datatypes.ReadGroupRequest) ([]reads.GroupResultSet, error) {
+	rs, err := a.executor.ReadGroup(a.nodeID, a.shards.shardIDs(), ctx, req)
+	if err == nil {
+		return []reads.GroupResultSet{rs}, nil
+	}
+	if !a.retry {
+		return nil, err
+	}
+	a.dirty.Store(a.nodeID, struct{}{})
+	for shardsByNodeID := a.shuffleShards(); shardsByNodeID != nil; shardsByNodeID = a.shuffleShards() {
+		var mu sync.Mutex
+		var g errgroup.Group
+		rss := make([]reads.GroupResultSet, 0, len(shardsByNodeID))
+		for nodeID, shards := range shardsByNodeID {
+			nodeID, shards := nodeID, shards
+			g.Go(func() error {
+				input, err := a.executor.ReadGroup(nodeID, shards.shardIDs(), ctx, req)
+				if err != nil {
+					a.dirty.Store(nodeID, struct{}{})
+					return err
+				}
+				mu.Lock()
+				rss = append(rss, input)
+				mu.Unlock()
+				return nil
+			})
+		}
+		err = g.Wait()
+		if err == nil {
+			return rss, nil
+		}
+		for _, rs := range rss {
+			rs.Close()
 		}
 	}
 	return nil, err

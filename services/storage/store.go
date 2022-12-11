@@ -8,6 +8,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/gogo/protobuf/types"
+	"github.com/influxdata/influxdb/coordinator"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/query"
 	"github.com/influxdata/influxdb/services/meta"
@@ -33,18 +34,26 @@ func GetReadSource(any types.Any) (*ReadSource, error) {
 	return &source, nil
 }
 
+type TSDBStore interface {
+	Shards(ids []uint64) []*tsdb.Shard
+	MeasurementNames(ctx context.Context, auth query.FineAuthorizer, database string, cond influxql.Expr) ([][]byte, error)
+	TagKeys(ctx context.Context, auth query.FineAuthorizer, shardIDs []uint64, cond influxql.Expr) ([]tsdb.TagKeys, error)
+	TagValues(ctx context.Context, auth query.FineAuthorizer, shardIDs []uint64, cond influxql.Expr) ([]tsdb.TagValues, error)
+}
+
 type MetaClient interface {
+	NodeID() uint64
 	Database(name string) *meta.DatabaseInfo
 	ShardGroupsByTimeRange(database, policy string, min, max time.Time) (a []meta.ShardGroupInfo, err error)
 }
 
 type Store struct {
-	TSDBStore  *tsdb.Store
+	TSDBStore  TSDBStore
 	MetaClient MetaClient
 	Logger     *zap.Logger
 }
 
-func NewStore(store *tsdb.Store, metaClient MetaClient) *Store {
+func NewStore(store TSDBStore, metaClient MetaClient) *Store {
 	return &Store{
 		TSDBStore:  store,
 		MetaClient: metaClient,
@@ -121,9 +130,14 @@ func (s *Store) ReadFilter(ctx context.Context, req *datatypes.ReadFilterRequest
 		return nil, err
 	}
 
-	shardIDs, err := s.findShardIDs(database, rp, false, start, end)
-	if err != nil {
-		return nil, err
+	var shardIDs []uint64
+	if sIDs, ok := ctx.Value(coordinator.ShardIDsKey).([]uint64); ok {
+		shardIDs = sIDs
+	} else {
+		shardIDs, err = s.findShardIDs(database, rp, false, start, end)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(shardIDs) == 0 { // TODO(jeff): this was a typed nil
 		return nil, nil
@@ -159,9 +173,14 @@ func (s *Store) ReadGroup(ctx context.Context, req *datatypes.ReadGroupRequest) 
 		return nil, err
 	}
 
-	shardIDs, err := s.findShardIDs(database, rp, false, start, end)
-	if err != nil {
-		return nil, err
+	var shardIDs []uint64
+	if sIDs, ok := ctx.Value(coordinator.ShardIDsKey).([]uint64); ok {
+		shardIDs = sIDs
+	} else {
+		shardIDs, err = s.findShardIDs(database, rp, false, start, end)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(shardIDs) == 0 {
 		return nil, nil
@@ -405,4 +424,107 @@ func (s *Store) MeasurementNames(ctx context.Context, req *MeasurementNamesReque
 
 func (s *Store) GetSource(db, rp string) proto.Message {
 	return &ReadSource{Database: db, RetentionPolicy: rp}
+}
+
+type StoreMapper interface {
+	MapShards(database, rp string, start, end int64, nodeID uint64, cursorFn func(ctx context.Context, shardIDs []uint64) (reads.SeriesCursor, error)) (coordinator.Store, error)
+}
+
+type ClusterStore struct {
+	*Store
+
+	StoreMapper StoreMapper
+}
+
+func NewClusterStore(store TSDBStore, metaClient MetaClient, metaExecutor *coordinator.MetaExecutor) *ClusterStore {
+	return &ClusterStore{
+		Store:       NewStore(store, metaClient),
+		StoreMapper: &coordinator.ClusterStoreMapper{MetaClient: metaClient, MetaExecutor: metaExecutor},
+	}
+}
+
+func (s *ClusterStore) ReadFilter(ctx context.Context, req *datatypes.ReadFilterRequest) (reads.ResultSet, error) {
+	if req.ReadSource == nil {
+		return nil, errors.New("missing read source")
+	}
+
+	source, err := GetReadSource(*req.ReadSource)
+	if err != nil {
+		return nil, err
+	}
+
+	database, rp, start, end, err := s.validateArgs(source.Database, source.RetentionPolicy, req.Range.Start, req.Range.End)
+	if err != nil {
+		return nil, err
+	}
+
+	var nodeID uint64
+	if opts := ReadOptionsFromContext(ctx); opts != nil {
+		nodeID = opts.NodeID
+	}
+
+	req.Range.Start = start
+	req.Range.End = end
+
+	cursorFn := func(ctx context.Context, shardIDs []uint64) (reads.SeriesCursor, error) {
+		var cur reads.SeriesCursor
+		if ic, err := newIndexSeriesCursor(ctx, req.Predicate, s.TSDBStore.Shards(shardIDs)); err != nil {
+			return nil, err
+		} else if ic == nil { // TODO(jeff): this was a typed nil
+			return nil, nil
+		} else {
+			cur = ic
+		}
+		return cur, nil
+	}
+
+	shards, err := s.StoreMapper.MapShards(database, rp, start, end, nodeID, cursorFn)
+	if err != nil {
+		return nil, err
+	} else if shards == nil {
+		return nil, nil
+	}
+
+	return shards.ReadFilter(ctx, req)
+}
+
+func (s *ClusterStore) ReadGroup(ctx context.Context, req *datatypes.ReadGroupRequest) (reads.GroupResultSet, error) {
+	if req.ReadSource == nil {
+		return nil, errors.New("missing read source")
+	}
+
+	source, err := GetReadSource(*req.ReadSource)
+	if err != nil {
+		return nil, err
+	}
+
+	database, rp, start, end, err := s.validateArgs(source.Database, source.RetentionPolicy, req.Range.Start, req.Range.End)
+	if err != nil {
+		return nil, err
+	}
+
+	var nodeID uint64
+	if opts := ReadOptionsFromContext(ctx); opts != nil {
+		nodeID = opts.NodeID
+	}
+
+	req.Range.Start = start
+	req.Range.End = end
+
+	cursorFn := func(ctx context.Context, shardIDs []uint64) (reads.SeriesCursor, error) {
+		cur, err := newIndexSeriesCursor(ctx, req.Predicate, s.TSDBStore.Shards(shardIDs))
+		if cur == nil || err != nil {
+			return nil, err
+		}
+		return cur, nil
+	}
+
+	shards, err := s.StoreMapper.MapShards(database, rp, start, end, nodeID, cursorFn)
+	if err != nil {
+		return nil, err
+	} else if shards == nil {
+		return nil, nil
+	}
+
+	return shards.ReadGroup(ctx, req)
 }

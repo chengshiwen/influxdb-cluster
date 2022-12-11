@@ -18,8 +18,12 @@ import (
 
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/monitor"
+	"github.com/influxdata/influxdb/pkg/estimator"
+	"github.com/influxdata/influxdb/pkg/tracing"
 	"github.com/influxdata/influxdb/query"
 	"github.com/influxdata/influxdb/services/meta"
+	"github.com/influxdata/influxdb/storage/reads"
+	"github.com/influxdata/influxdb/storage/reads/datatypes"
 	"github.com/influxdata/influxdb/tcp"
 	"github.com/influxdata/influxdb/tsdb"
 	"github.com/influxdata/influxql"
@@ -55,6 +59,9 @@ const (
 	executeStatementRequestMessage
 	executeStatementResponseMessage
 
+	taskManagerStatementRequestMessage
+	taskManagerStatementResponseMessage
+
 	measurementNamesRequestMessage
 	measurementNamesResponseMessage
 
@@ -64,11 +71,17 @@ const (
 	tagValuesRequestMessage
 	tagValuesResponseMessage
 
-	seriesCardinalityRequestMessage
-	seriesCardinalityResponseMessage
+	seriesSketchesRequestMessage
+	seriesSketchesResponseMessage
 
-	measurementsCardinalityRequestMessage
-	measurementsCardinalityResponseMessage
+	measurementsSketchesRequestMessage
+	measurementsSketchesResponseMessage
+
+	storeReadFilterRequestMessage
+	storeReadFilterResponseMessage
+
+	storeReadGroupRequestMessage
+	storeReadGroupResponseMessage
 
 	createIteratorRequestMessage
 	createIteratorResponseMessage
@@ -110,6 +123,9 @@ const (
 // BackupTimeout is the time before a connection times out when performing a backup.
 const BackupTimeout = 30 * time.Second
 
+// ShardIDsKey is the shardIDs context key when handling read request.
+const ShardIDsKey ContextKey = iota + 1
+
 // Service processes data received over raw TCP connections.
 type Service struct {
 	mu sync.RWMutex
@@ -143,6 +159,10 @@ type Service struct {
 	HintedHandoff interface {
 		RemoveNode(ownerID uint64) error
 	}
+
+	TaskManager query.StatementExecutor
+
+	Store Store
 
 	TSDBStore TSDBStore
 	Monitor   *monitor.Monitor
@@ -306,7 +326,7 @@ func (s *Service) handleConn(conn net.Conn) {
 		// Read type-length-value.
 		typ, err := ReadType(conn)
 		if err != nil {
-			if strings.HasSuffix(err.Error(), "EOF") || strings.Contains(err.Error(), "use of closed network connection") {
+			if strings.Contains(err.Error(), "EOF") || strings.Contains(err.Error(), "use of closed network connection") {
 				return
 			}
 			s.Logger.Error("Unable to read type", zap.Error(err))
@@ -338,6 +358,9 @@ func (s *Service) handleConn(conn net.Conn) {
 				s.Logger.Error("Process execute statement error", zap.Error(err))
 			}
 			s.executeStatementResponse(conn, err)
+		case taskManagerStatementRequestMessage:
+			s.processTaskManagerStatementRequest(conn)
+			return
 		case measurementNamesRequestMessage:
 			s.processMeasurementNamesRequest(conn)
 			return
@@ -347,11 +370,17 @@ func (s *Service) handleConn(conn net.Conn) {
 		case tagValuesRequestMessage:
 			s.processTagValuesRequest(conn)
 			return
-		case seriesCardinalityRequestMessage:
-			s.processSeriesCardinalityRequest(conn)
+		case seriesSketchesRequestMessage:
+			s.processSeriesSketchesRequest(conn)
 			return
-		case measurementsCardinalityRequestMessage:
-			s.processMeasurementsCardinalityRequest(conn)
+		case measurementsSketchesRequestMessage:
+			s.processMeasurementsSketchesRequest(conn)
+			return
+		case storeReadFilterRequestMessage:
+			s.processStoreReadFilterRequest(conn)
+			return
+		case storeReadGroupRequestMessage:
+			s.processStoreReadGroupRequest(conn)
 			return
 		case createIteratorRequestMessage:
 			atomic.AddInt64(&s.stats.CreateIteratorReq, 1)
@@ -529,6 +558,49 @@ func (s *Service) writeShardResponse(w io.Writer, e error) {
 	}
 }
 
+func (s *Service) processTaskManagerStatementRequest(conn net.Conn) {
+	var result *query.Result
+	if err := func() error {
+		// Parse request.
+		var req TaskManagerStatementRequest
+		if err := DecodeLV(conn, &req); err != nil {
+			return err
+		}
+
+		// Parse the InfluxQL statement.
+		stmt, err := influxql.ParseStatement(req.Statement)
+		if err != nil {
+			return err
+		}
+
+		ctx := &query.ExecutionContext{
+			Context: context.Background(),
+			Results: make(chan *query.Result, 1),
+		}
+
+		// Execute the statement on the task manager.
+		err = s.TaskManager.ExecuteStatement(ctx, stmt)
+		if err != nil {
+			return err
+		}
+
+		result = <-ctx.Results
+		return nil
+	}(); err != nil {
+		s.Logger.Error("Error reading TaskManagerStatement request", zap.Error(err))
+		EncodeTLV(conn, taskManagerStatementResponseMessage, &TaskManagerStatementResponse{Err: err})
+		return
+	}
+
+	// Encode success response.
+	if err := EncodeTLV(conn, taskManagerStatementResponseMessage, &TaskManagerStatementResponse{
+		Result: *result,
+	}); err != nil {
+		s.Logger.Error("Error writing TaskManagerStatement response", zap.Error(err))
+		return
+	}
+}
+
 func (s *Service) processMeasurementNamesRequest(conn net.Conn) {
 	names, err := func() ([][]byte, error) {
 		// Parse request.
@@ -604,57 +676,161 @@ func (s *Service) processTagValuesRequest(conn net.Conn) {
 	}
 }
 
-func (s *Service) processSeriesCardinalityRequest(conn net.Conn) {
-	cardinality, err := func() (int64, error) {
+func (s *Service) processSeriesSketchesRequest(conn net.Conn) {
+	ss, ts, err := func() (estimator.Sketch, estimator.Sketch, error) {
 		// Parse request.
-		var req SeriesCardinalityRequest
+		var req SeriesSketchesRequest
 		if err := DecodeLV(conn, &req); err != nil {
-			return 0, err
+			return nil, nil, err
 		}
-		// Return series cardinality.
-		return s.TSDBStore.SeriesCardinality(context.Background(), req.Database)
+		// Return series sketches.
+		return s.TSDBStore.SeriesSketches(context.Background(), req.Database)
 	}()
 	if err != nil {
-		s.Logger.Error("Error reading SeriesCardinality request", zap.Error(err))
-		EncodeTLV(conn, seriesCardinalityResponseMessage, &SeriesCardinalityResponse{Err: err})
+		s.Logger.Error("Error reading SeriesSketches request", zap.Error(err))
+		EncodeTLV(conn, seriesSketchesResponseMessage, &SeriesSketchesResponse{Err: err})
 		return
 	}
 
 	// Encode success response.
-	if err := EncodeTLV(conn, seriesCardinalityResponseMessage, &SeriesCardinalityResponse{
-		Cardinality: cardinality,
+	if err := EncodeTLV(conn, seriesSketchesResponseMessage, &SeriesSketchesResponse{
+		Sketch:   ss,
+		TSSketch: ts,
 	}); err != nil {
-		s.Logger.Error("Error writing SeriesCardinality response", zap.Error(err))
+		s.Logger.Error("Error writing SeriesSketches response", zap.Error(err))
 		return
 	}
 }
 
-func (s *Service) processMeasurementsCardinalityRequest(conn net.Conn) {
-	cardinality, err := func() (int64, error) {
+func (s *Service) processMeasurementsSketchesRequest(conn net.Conn) {
+	ss, ts, err := func() (estimator.Sketch, estimator.Sketch, error) {
 		// Parse request.
-		var req MeasurementsCardinalityRequest
+		var req MeasurementsSketchesRequest
 		if err := DecodeLV(conn, &req); err != nil {
-			return 0, err
+			return nil, nil, err
 		}
-		// Return measurements cardinality.
-		return s.TSDBStore.MeasurementsCardinality(context.Background(), req.Database)
+		// Return measurements sketches.
+		return s.TSDBStore.MeasurementsSketches(context.Background(), req.Database)
 	}()
 	if err != nil {
-		s.Logger.Error("Error reading MeasurementsCardinality request", zap.Error(err))
-		EncodeTLV(conn, measurementsCardinalityResponseMessage, &MeasurementsCardinalityResponse{Err: err})
+		s.Logger.Error("Error reading MeasurementsSketches request", zap.Error(err))
+		EncodeTLV(conn, measurementsSketchesResponseMessage, &MeasurementsSketchesResponse{Err: err})
 		return
 	}
 
 	// Encode success response.
-	if err := EncodeTLV(conn, measurementsCardinalityResponseMessage, &MeasurementsCardinalityResponse{
-		Cardinality: cardinality,
+	if err := EncodeTLV(conn, measurementsSketchesResponseMessage, &MeasurementsSketchesResponse{
+		Sketch:   ss,
+		TSSketch: ts,
 	}); err != nil {
-		s.Logger.Error("Error writing MeasurementsCardinality response", zap.Error(err))
+		s.Logger.Error("Error writing MeasurementsSketches response", zap.Error(err))
+		return
+	}
+}
+
+func (s *Service) processStoreReadFilterRequest(conn net.Conn) {
+	rs, err := func() (reads.ResultSet, error) {
+		// Parse request.
+		var req StoreReadFilterRequest
+		if err := DecodeLV(conn, &req); err != nil {
+			return nil, err
+		}
+		// Read filter from storage store.
+		ctx := context.WithValue(context.Background(), ShardIDsKey, req.ShardIDs)
+		return s.Store.ReadFilter(ctx, &req.Request)
+	}()
+	if err != nil {
+		s.Logger.Error("Error reading StoreReadFilter request", zap.Error(err))
+		EncodeTLV(conn, storeReadFilterResponseMessage, &StoreReadFilterResponse{Err: err})
+		return
+	}
+
+	// Encode success response.
+	if err := EncodeTLV(conn, storeReadFilterResponseMessage, &StoreReadFilterResponse{}); err != nil {
+		s.Logger.Error("Error writing StoreReadFilter response", zap.Error(err))
+		return
+	}
+
+	// Exit if no result set was produced.
+	if rs == nil {
+		return
+	}
+	defer rs.Close()
+
+	// Stream result set to connection.
+	stream := NewStoreStreamSender(conn)
+	w := reads.NewResponseWriter(stream, 0)
+	if err := w.WriteResultSet(rs); err != nil {
+		s.Logger.Error("Error writing StoreReadFilter response", zap.Error(err))
+		return
+	}
+	w.Flush()
+
+	if err := w.Err(); err != nil {
+		s.Logger.Error("Error writing StoreReadFilter response", zap.Error(err))
+		return
+	}
+
+	if err := stream.Close(); err != nil {
+		s.Logger.Error("Error writing StoreReadFilter response", zap.Error(err))
+		return
+	}
+}
+
+func (s *Service) processStoreReadGroupRequest(conn net.Conn) {
+	var hints datatypes.HintFlags
+	rs, err := func() (reads.GroupResultSet, error) {
+		// Parse request.
+		var req StoreReadGroupRequest
+		if err := DecodeLV(conn, &req); err != nil {
+			return nil, err
+		}
+		hints = req.Request.Hints
+		// Read group from storage store.
+		ctx := context.WithValue(context.Background(), ShardIDsKey, req.ShardIDs)
+		return s.Store.ReadGroup(ctx, &req.Request)
+	}()
+	if err != nil {
+		s.Logger.Error("Error reading StoreReadGroup request", zap.Error(err))
+		EncodeTLV(conn, storeReadGroupResponseMessage, &StoreReadGroupResponse{Err: err})
+		return
+	}
+
+	// Encode success response.
+	if err := EncodeTLV(conn, storeReadGroupResponseMessage, &StoreReadGroupResponse{}); err != nil {
+		s.Logger.Error("Error writing StoreReadGroup response", zap.Error(err))
+		return
+	}
+
+	// Exit if no result set was produced.
+	if rs == nil {
+		return
+	}
+	defer rs.Close()
+
+	// Stream result set to connection.
+	stream := NewStoreStreamSender(conn)
+	w := reads.NewResponseWriter(stream, hints)
+	if err := w.WriteGroupResultSet(rs); err != nil {
+		s.Logger.Error("Error writing StoreReadGroup response", zap.Error(err))
+		return
+	}
+	w.Flush()
+
+	if err := w.Err(); err != nil {
+		s.Logger.Error("Error writing StoreReadGroup response", zap.Error(err))
+		return
+	}
+
+	if err := stream.Close(); err != nil {
+		s.Logger.Error("Error writing StoreReadGroup response", zap.Error(err))
 		return
 	}
 }
 
 func (s *Service) processCreateIteratorRequest(conn net.Conn) {
+	var t *tracing.Trace
+	var span *tracing.Span
 	itr, err := func() (query.Iterator, error) {
 		// Parse request.
 		var req CreateIteratorRequest
@@ -668,8 +844,16 @@ func (s *Service) processCreateIteratorRequest(conn net.Conn) {
 			return nil, nil
 		}
 
+		// Start a new trace from the parent span.
+		if req.SpanContext.TraceID != 0 {
+			t, span = tracing.NewTraceFromSpan("remote_iterator", req.SpanContext)
+		} else {
+			t, span = tracing.NewTrace("remote_iterator")
+		}
+		ctx := tracing.NewContextWithTrace(context.Background(), t)
+		ctx = tracing.NewContextWithSpan(ctx, span)
+
 		// Generate a single iterator from all shards.
-		ctx := context.Background()
 		m := &req.Measurement
 		if m.Regex != nil {
 			measurements := sg.MeasurementsByRegex(m.Regex.Val)
@@ -735,9 +919,24 @@ func (s *Service) processCreateIteratorRequest(conn net.Conn) {
 		return
 	}
 
+	// New iterator encoder.
+	encoder := query.NewIteratorEncoder(conn)
+
 	// Stream iterator to connection.
-	if err := query.NewIteratorEncoder(conn).EncodeIterator(itr); err != nil {
+	if err := encoder.EncodeIterator(itr); err != nil {
 		s.Logger.Error("Error encoding CreateIterator iterator", zap.Error(err))
+		return
+	}
+
+	// Close iterator and finish span.
+	if itr != nil {
+		itr.Close()
+	}
+	span.Finish()
+
+	// Stream trace to connection.
+	if err := encoder.EncodeTrace(t); err != nil {
+		s.Logger.Error("Error encoding CreateIterator trace", zap.Error(err))
 		return
 	}
 }

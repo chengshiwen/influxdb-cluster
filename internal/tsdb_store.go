@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/influxdata/influxdb/models"
+	"github.com/influxdata/influxdb/pkg/estimator"
 	"github.com/influxdata/influxdb/query"
 	"github.com/influxdata/influxdb/tsdb"
 	"github.com/influxdata/influxql"
@@ -31,11 +32,13 @@ type TSDBStoreMock struct {
 	ImportShardFn             func(id uint64, r io.Reader) error
 	MeasurementSeriesCountsFn func(database string) (measuments int, series int)
 	MeasurementsCardinalityFn func(database string) (int64, error)
+	MeasurementsSketchesFn    func(ctx context.Context, database string) (estimator.Sketch, estimator.Sketch, error)
 	MeasurementNamesFn        func(auth query.FineAuthorizer, database string, cond influxql.Expr) ([][]byte, error)
 	OpenFn                    func() error
 	PathFn                    func() string
 	RestoreShardFn            func(id uint64, r io.Reader) error
 	SeriesCardinalityFn       func(database string) (int64, error)
+	SeriesSketchesFn          func(ctx context.Context, database string) (estimator.Sketch, estimator.Sketch, error)
 	SetShardEnabledFn         func(shardID uint64, enabled bool) error
 	ShardFn                   func(id uint64) *tsdb.Shard
 	ShardGroupFn              func(ids []uint64) tsdb.ShardGroup
@@ -102,6 +105,9 @@ func (s *TSDBStoreMock) MeasurementSeriesCounts(database string) (measuments int
 func (s *TSDBStoreMock) MeasurementsCardinality(ctx context.Context, database string) (int64, error) {
 	return s.MeasurementsCardinalityFn(database)
 }
+func (s *TSDBStoreMock) MeasurementsSketches(ctx context.Context, database string) (estimator.Sketch, estimator.Sketch, error) {
+	return s.MeasurementsSketchesFn(ctx, database)
+}
 func (s *TSDBStoreMock) Open() error {
 	return s.OpenFn()
 }
@@ -113,6 +119,9 @@ func (s *TSDBStoreMock) RestoreShard(id uint64, r io.Reader) error {
 }
 func (s *TSDBStoreMock) SeriesCardinality(ctx context.Context, database string) (int64, error) {
 	return s.SeriesCardinalityFn(database)
+}
+func (s *TSDBStoreMock) SeriesSketches(ctx context.Context, database string) (estimator.Sketch, estimator.Sketch, error) {
+	return s.SeriesSketchesFn(ctx, database)
 }
 func (s *TSDBStoreMock) SetShardEnabled(shardID uint64, enabled bool) error {
 	return s.SetShardEnabledFn(shardID, enabled)

@@ -121,3 +121,13 @@ func (c *mockMetaClient) DataNode(id uint64) (ni *meta.NodeInfo, err error) {
 func (c *mockMetaClient) DataNodes() []meta.NodeInfo {
 	return c.nodes
 }
+
+func (c *mockMetaClient) DataNodeByTCPAddr(tcpAddr string) (ni *meta.NodeInfo, err error) {
+	for i := 0; i < len(c.nodes); i++ {
+		if c.nodes[i].TCPAddr == tcpAddr {
+			ni = &c.nodes[i]
+			return
+		}
+	}
+	return
+}

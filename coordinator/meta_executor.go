@@ -5,11 +5,16 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/influxdata/influxdb/pkg/estimator"
+	"github.com/influxdata/influxdb/pkg/tracing"
 	"github.com/influxdata/influxdb/query"
 	"github.com/influxdata/influxdb/services/meta"
+	"github.com/influxdata/influxdb/storage/reads"
+	"github.com/influxdata/influxdb/storage/reads/datatypes"
 	"github.com/influxdata/influxdb/tcp"
 	"github.com/influxdata/influxdb/tsdb"
 	"github.com/influxdata/influxql"
@@ -29,6 +34,7 @@ type MetaExecutor struct {
 		NodeID() uint64
 		DataNode(id uint64) (ni *meta.NodeInfo, err error)
 		DataNodes() []meta.NodeInfo
+		DataNodeByTCPAddr(tcpAddr string) (*meta.NodeInfo, error)
 	}
 
 	TLSConfig *tls.Config
@@ -163,6 +169,28 @@ func (e *MetaExecutor) ExecuteQuery(fn func() (interface{}, error), rfn func(nod
 	return results, err
 }
 
+func (e *MetaExecutor) TaskManagerStatement(nodeID uint64, stmt influxql.Statement) (query.Result, error) {
+	conn, err := e.dial(nodeID)
+	if err != nil {
+		return query.Result{}, err
+	}
+	defer conn.Close()
+
+	// Write request.
+	if err := EncodeTLV(conn, taskManagerStatementRequestMessage, &TaskManagerStatementRequest{
+		Statement: stmt.String(),
+	}); err != nil {
+		return query.Result{}, err
+	}
+
+	// Read the response.
+	var resp TaskManagerStatementResponse
+	if _, err := DecodeTLV(conn, &resp); err != nil {
+		return query.Result{}, err
+	}
+	return resp.Result, resp.Err
+}
+
 func (e *MetaExecutor) MeasurementNames(nodeID uint64, database string, cond influxql.Expr) ([][]byte, error) {
 	conn, err := e.dial(nodeID)
 	if err != nil {
@@ -232,48 +260,48 @@ func (e *MetaExecutor) TagValues(nodeID uint64, shardIDs []uint64, cond influxql
 	return resp.TagValues, nil
 }
 
-func (e *MetaExecutor) SeriesCardinality(nodeID uint64, database string) (int64, error) {
+func (e *MetaExecutor) SeriesSketches(nodeID uint64, database string) (estimator.Sketch, estimator.Sketch, error) {
 	conn, err := e.dial(nodeID)
 	if err != nil {
-		return 0, err
+		return nil, nil, err
 	}
 	defer conn.Close()
 
 	// Write request.
-	if err := EncodeTLV(conn, seriesCardinalityRequestMessage, &SeriesCardinalityRequest{
+	if err := EncodeTLV(conn, seriesSketchesRequestMessage, &SeriesSketchesRequest{
 		Database: database,
 	}); err != nil {
-		return 0, err
+		return nil, nil, err
 	}
 
 	// Read the response.
-	var resp SeriesCardinalityResponse
+	var resp SeriesSketchesResponse
 	if _, err := DecodeTLV(conn, &resp); err != nil {
-		return 0, err
+		return nil, nil, err
 	}
-	return resp.Cardinality, nil
+	return resp.Sketch, resp.TSSketch, nil
 }
 
-func (e *MetaExecutor) MeasurementsCardinality(nodeID uint64, database string) (int64, error) {
+func (e *MetaExecutor) MeasurementsSketches(nodeID uint64, database string) (estimator.Sketch, estimator.Sketch, error) {
 	conn, err := e.dial(nodeID)
 	if err != nil {
-		return 0, err
+		return nil, nil, err
 	}
 	defer conn.Close()
 
 	// Write request.
-	if err := EncodeTLV(conn, measurementsCardinalityRequestMessage, &MeasurementsCardinalityRequest{
+	if err := EncodeTLV(conn, measurementsSketchesRequestMessage, &MeasurementsSketchesRequest{
 		Database: database,
 	}); err != nil {
-		return 0, err
+		return nil, nil, err
 	}
 
 	// Read the response.
-	var resp MeasurementsCardinalityResponse
+	var resp MeasurementsSketchesResponse
 	if _, err := DecodeTLV(conn, &resp); err != nil {
-		return 0, err
+		return nil, nil, err
 	}
-	return resp.Cardinality, nil
+	return resp.Sketch, resp.TSSketch, nil
 }
 
 func (e *MetaExecutor) FieldDimensions(nodeID uint64, shardIDs []uint64, m *influxql.Measurement) (fields map[string]influxql.DataType, dimensions map[string]struct{}, err error) {
@@ -329,6 +357,16 @@ func (e *MetaExecutor) CreateIterator(nodeID uint64, shardIDs []uint64, ctx cont
 		return nil, err
 	}
 
+	var sc tracing.SpanContext
+	if span := tracing.SpanFromContext(ctx); span != nil {
+		span = span.StartSpan("remote_iterator_request")
+		defer span.Finish()
+
+		span.SetLabels("node_id", strconv.Itoa(int(nodeID)))
+		ctx = tracing.NewContextWithSpan(ctx, span)
+		sc = span.Context()
+	}
+
 	var resp CreateIteratorResponse
 	if err := func() error {
 		// Write request.
@@ -336,6 +374,7 @@ func (e *MetaExecutor) CreateIterator(nodeID uint64, shardIDs []uint64, ctx cont
 			ShardIDs:    shardIDs,
 			Measurement: *m,
 			Opt:         opt,
+			SpanContext: sc,
 		}); err != nil {
 			return err
 		}
@@ -378,6 +417,70 @@ func (e *MetaExecutor) IteratorCost(nodeID uint64, shardIDs []uint64, m *influxq
 		return query.IteratorCost{}, err
 	}
 	return resp.Cost, resp.Err
+}
+
+func (e *MetaExecutor) ReadFilter(nodeID uint64, shardIDs []uint64, ctx context.Context, req *datatypes.ReadFilterRequest) (reads.ResultSet, error) {
+	conn, err := e.dial(nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := func() error {
+		// Write request.
+		if err := EncodeTLV(conn, storeReadFilterRequestMessage, &StoreReadFilterRequest{
+			ShardIDs: shardIDs,
+			Request:  *req,
+		}); err != nil {
+			return err
+		}
+
+		// Read the response.
+		var resp StoreReadFilterResponse
+		if _, err := DecodeTLV(conn, &resp); err != nil {
+			return err
+		} else if resp.Err != nil {
+			return err
+		}
+
+		return nil
+	}(); err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	return reads.NewResultSetStreamReader(NewStoreStreamReceiver(conn)), nil
+}
+
+func (e *MetaExecutor) ReadGroup(nodeID uint64, shardIDs []uint64, ctx context.Context, req *datatypes.ReadGroupRequest) (reads.GroupResultSet, error) {
+	conn, err := e.dial(nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := func() error {
+		// Write request.
+		if err := EncodeTLV(conn, storeReadGroupRequestMessage, &StoreReadGroupRequest{
+			ShardIDs: shardIDs,
+			Request:  *req,
+		}); err != nil {
+			return err
+		}
+
+		// Read the response.
+		var resp StoreReadGroupResponse
+		if _, err := DecodeTLV(conn, &resp); err != nil {
+			return err
+		} else if resp.Err != nil {
+			return err
+		}
+
+		return nil
+	}(); err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	return reads.NewGroupResultSetStreamReader(NewStoreStreamReceiver(conn)), nil
 }
 
 // dial returns a connection to a single node in the cluster.

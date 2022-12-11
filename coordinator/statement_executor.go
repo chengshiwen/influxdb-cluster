@@ -15,6 +15,7 @@ import (
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/monitor"
 	"github.com/influxdata/influxdb/pkg/bytesutil"
+	"github.com/influxdata/influxdb/pkg/estimator"
 	"github.com/influxdata/influxdb/pkg/tracing"
 	"github.com/influxdata/influxdb/pkg/tracing/fields"
 	"github.com/influxdata/influxdb/query"
@@ -1406,6 +1407,8 @@ type TSDBStore interface {
 
 	SeriesCardinality(ctx context.Context, database string) (int64, error)
 	MeasurementsCardinality(ctx context.Context, database string) (int64, error)
+	SeriesSketches(ctx context.Context, database string) (estimator.Sketch, estimator.Sketch, error)
+	MeasurementsSketches(ctx context.Context, database string) (estimator.Sketch, estimator.Sketch, error)
 }
 
 var _ TSDBStore = ClusterTSDBStore{}
@@ -1583,11 +1586,71 @@ func (s ClusterTSDBStore) TagValues(ctx context.Context, auth query.FineAuthoriz
 }
 
 func (s ClusterTSDBStore) SeriesCardinality(ctx context.Context, database string) (int64, error) {
-	return s.Store.SeriesCardinality(ctx, database)
+	fn := func() (interface{}, error) {
+		ss, ts, err := s.Store.SeriesSketches(ctx, database)
+		return []estimator.Sketch{ss, ts}, err
+	}
+	rfn := func(nodeID uint64) (interface{}, error) {
+		ss, ts, err := s.MetaExecutor.SeriesSketches(nodeID, database)
+		return []estimator.Sketch{ss, ts}, err
+	}
+	results, _ := s.MetaExecutor.ExecuteQuery(fn, rfn)
+
+	var ss estimator.Sketch
+	var ts estimator.Sketch
+	for _, result := range results {
+		sketches, ok := result.([]estimator.Sketch)
+		if !ok {
+			continue
+		}
+		s, t := sketches[0], sketches[1]
+		if ss == nil {
+			ss, ts = s, t
+		} else if err := ss.Merge(s); err != nil {
+			return 0, err
+		} else if err = ts.Merge(t); err != nil {
+			return 0, err
+		}
+	}
+
+	if ss == nil {
+		return 0, nil
+	}
+	return int64(ss.Count() - ts.Count()), nil
 }
 
 func (s ClusterTSDBStore) MeasurementsCardinality(ctx context.Context, database string) (int64, error) {
-	return s.Store.MeasurementsCardinality(ctx, database)
+	fn := func() (interface{}, error) {
+		ss, ts, err := s.Store.MeasurementsSketches(ctx, database)
+		return []estimator.Sketch{ss, ts}, err
+	}
+	rfn := func(nodeID uint64) (interface{}, error) {
+		ss, ts, err := s.MetaExecutor.MeasurementsSketches(nodeID, database)
+		return []estimator.Sketch{ss, ts}, err
+	}
+	results, _ := s.MetaExecutor.ExecuteQuery(fn, rfn)
+
+	var ss estimator.Sketch
+	var ts estimator.Sketch
+	for _, result := range results {
+		sketches, ok := result.([]estimator.Sketch)
+		if !ok {
+			continue
+		}
+		s, t := sketches[0], sketches[1]
+		if ss == nil {
+			ss, ts = s, t
+		} else if err := ss.Merge(s); err != nil {
+			return 0, err
+		} else if err = ts.Merge(t); err != nil {
+			return 0, err
+		}
+	}
+
+	if ss == nil {
+		return 0, nil
+	}
+	return int64(ss.Count() - ts.Count()), nil
 }
 
 // joinUint64 returns a comma-delimited string of uint64 numbers.
@@ -1601,3 +1664,112 @@ func joinUint64(a []uint64) string {
 	}
 	return buf.String()
 }
+
+// ClusterTaskManager embeds a query.TaskManager and implements cluster task manager
+// to satisfy the query.StatementExecutor interface.
+type ClusterTaskManager struct {
+	*query.TaskManager
+
+	MetaExecutor *MetaExecutor
+}
+
+// ExecuteStatement executes a statement containing one of the task management queries.
+func (t *ClusterTaskManager) ExecuteStatement(ctx *query.ExecutionContext, stmt influxql.Statement) error {
+	switch stmt := stmt.(type) {
+	case *influxql.ShowQueriesStatement:
+		rows, err := t.executeShowQueriesStatement(stmt)
+		if err != nil {
+			return err
+		}
+		ctx.Send(&query.Result{
+			Series: rows,
+		})
+	case *influxql.KillQueryStatement:
+		return t.executeKillQueryStatement(ctx, stmt)
+	default:
+		return query.ErrInvalidQuery
+	}
+	return nil
+}
+
+func (t *ClusterTaskManager) executeKillQueryStatement(ctx *query.ExecutionContext, stmt *influxql.KillQueryStatement) error {
+	if stmt.Host == "" {
+		return errors.New("tcp host required")
+	}
+	node, err := t.MetaExecutor.MetaClient.DataNodeByTCPAddr(stmt.Host)
+	if err != nil {
+		return err
+	}
+	localID := t.MetaExecutor.MetaClient.NodeID()
+	if localID == node.ID {
+		return t.TaskManager.ExecuteStatement(ctx, stmt)
+	}
+	if _, err := t.MetaExecutor.TaskManagerStatement(node.ID, stmt); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (t *ClusterTaskManager) executeShowQueriesStatement(stmt influxql.Statement) (models.Rows, error) {
+	fn := func() (interface{}, error) {
+		ctx := &query.ExecutionContext{
+			Context: context.Background(),
+			Results: make(chan *query.Result, 1),
+		}
+		err := t.TaskManager.ExecuteStatement(ctx, stmt)
+		if err != nil {
+			return nil, err
+		}
+		result := <-ctx.Results
+		localID := t.MetaExecutor.MetaClient.NodeID()
+		return &QueriesResult{NodeID: localID, Rows: result.Series}, nil
+	}
+	rfn := func(nodeID uint64) (interface{}, error) {
+		result, err := t.MetaExecutor.TaskManagerStatement(nodeID, stmt)
+		if err != nil {
+			return nil, err
+		}
+		return &QueriesResult{NodeID: nodeID, Rows: result.Series}, nil
+	}
+	results, _ := t.MetaExecutor.ExecuteQuery(fn, rfn)
+
+	queries := make(QueriesResults, 0, len(results))
+	for _, result := range results {
+		qr, ok := result.(*QueriesResult)
+		if !ok {
+			continue
+		}
+		if qr == nil || len(qr.Rows) == 0 || len(qr.Rows[0].Values) == 0 {
+			continue
+		}
+		queries = append(queries, qr)
+	}
+	sort.Sort(queries)
+
+	values := make([][]interface{}, 0, len(queries))
+	for _, qr := range queries {
+		node, err := t.MetaExecutor.MetaClient.DataNode(qr.NodeID)
+		if err != nil {
+			return nil, err
+		}
+		for _, v := range qr.Rows[0].Values {
+			values = append(values, []interface{}{v[0], node.ID, node.TCPAddr, v[1], v[2], v[3], v[4]})
+		}
+	}
+
+	return []*models.Row{{
+		Columns: []string{"qid", "node_id", "tcp_host", "query", "database", "duration", "status"},
+		Values:  values,
+	}}, nil
+}
+
+type QueriesResult struct {
+	NodeID uint64
+	Rows   models.Rows
+}
+
+type QueriesResults []*QueriesResult
+
+func (a QueriesResults) Len() int           { return len(a) }
+func (a QueriesResults) Less(i, j int) bool { return a[i].NodeID < a[j].NodeID }
+func (a QueriesResults) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }

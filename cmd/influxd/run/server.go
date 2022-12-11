@@ -76,7 +76,9 @@ type Server struct {
 	MetaClient *meta.Client
 
 	TSDBStore     *tsdb.Store
+	ClusterStore  *coordinator.ClusterTSDBStore
 	QueryExecutor *query.Executor
+	MetaExecutor  *coordinator.MetaExecutor
 	PointsWriter  *coordinator.PointsWriter
 	ShardWriter   *coordinator.ShardWriter
 	HintedHandoff *hh.Service
@@ -202,20 +204,23 @@ func NewServer(c *Config, buildInfo *BuildInfo) (*Server, error) {
 	s.PointsWriter.Subscriber = s.Subscriber
 
 	// Initialize meta executor.
-	metaExecutor := coordinator.NewMetaExecutor(time.Duration(c.Coordinator.QueryTimeout), time.Duration(c.Coordinator.DialTimeout))
-	metaExecutor.MetaClient = s.MetaClient
-	metaExecutor.TLSConfig = tlsClientConfig
+	s.MetaExecutor = coordinator.NewMetaExecutor(time.Duration(c.Coordinator.QueryTimeout), time.Duration(c.Coordinator.DialTimeout))
+	s.MetaExecutor.MetaClient = s.MetaClient
+	s.MetaExecutor.TLSConfig = tlsClientConfig
+
+	// Initialize cluster TSDB store.
+	s.ClusterStore = &coordinator.ClusterTSDBStore{Store: s.TSDBStore, MetaExecutor: s.MetaExecutor}
 
 	// Initialize query executor.
 	s.QueryExecutor = query.NewExecutor()
 	s.QueryExecutor.StatementExecutor = &coordinator.StatementExecutor{
 		MetaClient:  s.MetaClient,
-		TaskManager: s.QueryExecutor.TaskManager,
-		TSDBStore:   coordinator.ClusterTSDBStore{Store: s.TSDBStore, MetaExecutor: metaExecutor},
+		TaskManager: &coordinator.ClusterTaskManager{TaskManager: s.QueryExecutor.TaskManager, MetaExecutor: s.MetaExecutor},
+		TSDBStore:   s.ClusterStore,
 		ShardMapper: &coordinator.ClusterShardMapper{
 			MetaClient:   s.MetaClient,
 			TSDBStore:    s.TSDBStore,
-			MetaExecutor: metaExecutor,
+			MetaExecutor: s.MetaExecutor,
 		},
 		StrictErrorHandling: s.TSDBStore.EngineOptions.Config.StrictErrorHandling,
 		Monitor:             s.Monitor,
@@ -258,6 +263,8 @@ func (s *Server) appendCoordinatorService(c coordinator.Config) {
 	srv.TSDBStore = s.TSDBStore
 	srv.MetaClient = s.MetaClient
 	srv.HintedHandoff = s.HintedHandoff
+	srv.TaskManager = s.QueryExecutor.TaskManager
+	srv.Store = storage.NewStore(s.TSDBStore, s.MetaClient)
 	srv.Monitor = s.Monitor
 	srv.Server = s
 	s.Services = append(s.Services, srv)
@@ -318,7 +325,7 @@ func (s *Server) appendHTTPDService(c httpd.Config) {
 	srv.Handler.PointsWriter = s.PointsWriter
 	srv.Handler.Version = s.buildInfo.Version
 	srv.Handler.BuildType = "OSS"
-	ss := storage.NewStore(s.TSDBStore, s.MetaClient)
+	ss := storage.NewClusterStore(s.ClusterStore, s.MetaClient, s.MetaExecutor)
 	srv.Handler.Store = ss
 	if s.config.HTTPD.FluxEnabled {
 		srv.Handler.Controller = control.NewController(s.MetaClient, reads.NewReader(ss), authorizer, c.AuthEnabled, s.Logger)
@@ -632,7 +639,7 @@ func (s *Server) reportServer() {
 	for _, db := range dbs {
 		name := db.Name
 		// Use the context.Background() to avoid timing out on this.
-		n, err := s.TSDBStore.SeriesCardinality(context.Background(), name)
+		n, err := s.ClusterStore.SeriesCardinality(context.Background(), name)
 		if err != nil {
 			s.Logger.Error(fmt.Sprintf("Unable to get series cardinality for database %s: %v", name, err))
 		} else {
@@ -640,7 +647,7 @@ func (s *Server) reportServer() {
 		}
 
 		// Use the context.Background() to avoid timing out on this.
-		n, err = s.TSDBStore.MeasurementsCardinality(context.Background(), name)
+		n, err = s.ClusterStore.MeasurementsCardinality(context.Background(), name)
 		if err != nil {
 			s.Logger.Error(fmt.Sprintf("Unable to get measurement cardinality for database %s: %v", name, err))
 		} else {

@@ -11,8 +11,12 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/coordinator/internal"
 	"github.com/influxdata/influxdb/models"
+	"github.com/influxdata/influxdb/pkg/estimator"
+	"github.com/influxdata/influxdb/pkg/estimator/hll"
+	"github.com/influxdata/influxdb/pkg/tracing"
 	"github.com/influxdata/influxdb/query"
 	"github.com/influxdata/influxdb/services/meta"
+	"github.com/influxdata/influxdb/storage/reads/datatypes"
 	"github.com/influxdata/influxdb/tcp"
 	"github.com/influxdata/influxdb/tsdb"
 	"github.com/influxdata/influxql"
@@ -189,6 +193,62 @@ func (w *ExecuteStatementResponse) MarshalBinary() ([]byte, error) {
 func (w *ExecuteStatementResponse) UnmarshalBinary(buf []byte) error {
 	if err := proto.Unmarshal(buf, &w.pb); err != nil {
 		return err
+	}
+	return nil
+}
+
+// TaskManagerStatementRequest represents the a request to execute a task manager statement on a node.
+type TaskManagerStatementRequest struct {
+	Statement string
+}
+
+// MarshalBinary encodes r to a binary format.
+func (r *TaskManagerStatementRequest) MarshalBinary() ([]byte, error) {
+	return proto.Marshal(&internal.TaskManagerStatementRequest{
+		Statement: proto.String(r.Statement),
+	})
+}
+
+// UnmarshalBinary decodes data into r.
+func (r *TaskManagerStatementRequest) UnmarshalBinary(data []byte) error {
+	var pb internal.TaskManagerStatementRequest
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return err
+	}
+	r.Statement = pb.GetStatement()
+	return nil
+}
+
+// TaskManagerStatementResponse represents a response to show shards.
+type TaskManagerStatementResponse struct {
+	Result query.Result
+	Err    error
+}
+
+func (r *TaskManagerStatementResponse) MarshalBinary() ([]byte, error) {
+	var pb internal.TaskManagerStatementResponse
+	buf, err := r.Result.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	pb.Result = buf[:]
+	if r.Err != nil {
+		pb.Err = proto.String(r.Err.Error())
+	}
+	return proto.Marshal(&pb)
+}
+
+func (r *TaskManagerStatementResponse) UnmarshalBinary(data []byte) error {
+	var pb internal.TaskManagerStatementResponse
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return err
+	}
+	err := r.Result.UnmarshalJSON(pb.GetResult())
+	if err != nil {
+		return err
+	}
+	if pb.Err != nil {
+		r.Err = errors.New(pb.GetErr())
 	}
 	return nil
 }
@@ -408,21 +468,21 @@ func (r *TagValuesResponse) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-// SeriesCardinalityRequest represents a request to retrieve series cardinality.
-type SeriesCardinalityRequest struct {
+// SeriesSketchesRequest represents a request to retrieve series sketches.
+type SeriesSketchesRequest struct {
 	Database string
 }
 
 // MarshalBinary encodes r to a binary format.
-func (r *SeriesCardinalityRequest) MarshalBinary() ([]byte, error) {
-	return proto.Marshal(&internal.SeriesCardinalityRequest{
+func (r *SeriesSketchesRequest) MarshalBinary() ([]byte, error) {
+	return proto.Marshal(&internal.SeriesSketchesRequest{
 		Database: proto.String(r.Database),
 	})
 }
 
 // UnmarshalBinary decodes data into r.
-func (r *SeriesCardinalityRequest) UnmarshalBinary(data []byte) error {
-	var pb internal.SeriesCardinalityRequest
+func (r *SeriesSketchesRequest) UnmarshalBinary(data []byte) error {
+	var pb internal.SeriesSketchesRequest
 	if err := proto.Unmarshal(data, &pb); err != nil {
 		return err
 	}
@@ -430,48 +490,78 @@ func (r *SeriesCardinalityRequest) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-// SeriesCardinalityResponse represents a response from series cardinality.
-type SeriesCardinalityResponse struct {
-	Cardinality int64
-	Err         error
+// SeriesSketchesResponse represents a response from series sketches.
+type SeriesSketchesResponse struct {
+	Sketch   estimator.Sketch
+	TSSketch estimator.Sketch
+	Err      error
 }
 
-func (r *SeriesCardinalityResponse) MarshalBinary() ([]byte, error) {
-	var pb internal.SeriesCardinalityResponse
-	pb.Cardinality = proto.Int64(r.Cardinality)
+func (r *SeriesSketchesResponse) MarshalBinary() ([]byte, error) {
+	var pb internal.SeriesSketchesResponse
+	if r.Sketch != nil {
+		buf, err := r.Sketch.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		pb.Sketch = buf
+	}
+
+	if r.TSSketch != nil {
+		tsBuf, err := r.TSSketch.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		pb.TSSketch = tsBuf
+	}
+
 	if r.Err != nil {
 		pb.Err = proto.String(r.Err.Error())
 	}
 	return proto.Marshal(&pb)
 }
 
-func (r *SeriesCardinalityResponse) UnmarshalBinary(data []byte) error {
-	var pb internal.SeriesCardinalityResponse
+func (r *SeriesSketchesResponse) UnmarshalBinary(data []byte) error {
+	var pb internal.SeriesSketchesResponse
 	if err := proto.Unmarshal(data, &pb); err != nil {
 		return err
 	}
-	r.Cardinality = pb.GetCardinality()
+
+	if sketch := pb.GetSketch(); len(sketch) > 0 {
+		r.Sketch = &hll.Plus{}
+		if err := r.Sketch.UnmarshalBinary(sketch); err != nil {
+			return err
+		}
+	}
+
+	if tsSketch := pb.GetTSSketch(); len(tsSketch) > 0 {
+		r.TSSketch = &hll.Plus{}
+		if err := r.TSSketch.UnmarshalBinary(tsSketch); err != nil {
+			return err
+		}
+	}
+
 	if pb.Err != nil {
 		r.Err = errors.New(pb.GetErr())
 	}
 	return nil
 }
 
-// MeasurementsCardinalityRequest represents a request to retrieve measurements cardinality.
-type MeasurementsCardinalityRequest struct {
+// MeasurementsSketchesRequest represents a request to retrieve measurements sketches.
+type MeasurementsSketchesRequest struct {
 	Database string
 }
 
 // MarshalBinary encodes r to a binary format.
-func (r *MeasurementsCardinalityRequest) MarshalBinary() ([]byte, error) {
-	return proto.Marshal(&internal.MeasurementsCardinalityRequest{
+func (r *MeasurementsSketchesRequest) MarshalBinary() ([]byte, error) {
+	return proto.Marshal(&internal.MeasurementsSketchesRequest{
 		Database: proto.String(r.Database),
 	})
 }
 
 // UnmarshalBinary decodes data into r.
-func (r *MeasurementsCardinalityRequest) UnmarshalBinary(data []byte) error {
-	var pb internal.MeasurementsCardinalityRequest
+func (r *MeasurementsSketchesRequest) UnmarshalBinary(data []byte) error {
+	var pb internal.MeasurementsSketchesRequest
 	if err := proto.Unmarshal(data, &pb); err != nil {
 		return err
 	}
@@ -479,27 +569,171 @@ func (r *MeasurementsCardinalityRequest) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-// MeasurementsCardinalityResponse represents a response from measurements cardinality.
-type MeasurementsCardinalityResponse struct {
-	Cardinality int64
-	Err         error
+// MeasurementsSketchesResponse represents a response from measurements sketches.
+type MeasurementsSketchesResponse struct {
+	Sketch   estimator.Sketch
+	TSSketch estimator.Sketch
+	Err      error
 }
 
-func (r *MeasurementsCardinalityResponse) MarshalBinary() ([]byte, error) {
-	var pb internal.MeasurementsCardinalityResponse
-	pb.Cardinality = proto.Int64(r.Cardinality)
+func (r *MeasurementsSketchesResponse) MarshalBinary() ([]byte, error) {
+	var pb internal.MeasurementsSketchesResponse
+	if r.Sketch != nil {
+		buf, err := r.Sketch.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		pb.Sketch = buf
+	}
+
+	if r.TSSketch != nil {
+		tsBuf, err := r.TSSketch.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		pb.TSSketch = tsBuf
+	}
+
 	if r.Err != nil {
 		pb.Err = proto.String(r.Err.Error())
 	}
 	return proto.Marshal(&pb)
 }
 
-func (r *MeasurementsCardinalityResponse) UnmarshalBinary(data []byte) error {
-	var pb internal.MeasurementsCardinalityResponse
+func (r *MeasurementsSketchesResponse) UnmarshalBinary(data []byte) error {
+	var pb internal.MeasurementsSketchesResponse
 	if err := proto.Unmarshal(data, &pb); err != nil {
 		return err
 	}
-	r.Cardinality = pb.GetCardinality()
+
+	if sketch := pb.GetSketch(); len(sketch) > 0 {
+		r.Sketch = &hll.Plus{}
+		if err := r.Sketch.UnmarshalBinary(sketch); err != nil {
+			return err
+		}
+	}
+
+	if tsSketch := pb.GetTSSketch(); len(tsSketch) > 0 {
+		r.TSSketch = &hll.Plus{}
+		if err := r.TSSketch.UnmarshalBinary(tsSketch); err != nil {
+			return err
+		}
+	}
+
+	if pb.Err != nil {
+		r.Err = errors.New(pb.GetErr())
+	}
+	return nil
+}
+
+// StoreReadFilterRequest represents a request to read filter.
+type StoreReadFilterRequest struct {
+	ShardIDs []uint64
+	Request  datatypes.ReadFilterRequest
+}
+
+// MarshalBinary encodes r to a binary format.
+func (r *StoreReadFilterRequest) MarshalBinary() ([]byte, error) {
+	buf, err := r.Request.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	return proto.Marshal(&internal.StoreReadFilterRequest{
+		ShardIDs: r.ShardIDs,
+		Request:  buf,
+	})
+}
+
+// UnmarshalBinary decodes data into r.
+func (r *StoreReadFilterRequest) UnmarshalBinary(data []byte) error {
+	var pb internal.StoreReadFilterRequest
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return err
+	}
+	r.ShardIDs = pb.GetShardIDs()
+	if err := r.Request.Unmarshal(pb.GetRequest()); err != nil {
+		return err
+	}
+	return nil
+}
+
+// StoreReadFilterResponse represents a response from remote read filter.
+type StoreReadFilterResponse struct {
+	Err error
+}
+
+// MarshalBinary encodes r to a binary format.
+func (r *StoreReadFilterResponse) MarshalBinary() ([]byte, error) {
+	var pb internal.StoreReadFilterResponse
+	if r.Err != nil {
+		pb.Err = proto.String(r.Err.Error())
+	}
+	return proto.Marshal(&pb)
+}
+
+// UnmarshalBinary decodes data into r.
+func (r *StoreReadFilterResponse) UnmarshalBinary(data []byte) error {
+	var pb internal.StoreReadFilterResponse
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return err
+	}
+	if pb.Err != nil {
+		r.Err = errors.New(pb.GetErr())
+	}
+	return nil
+}
+
+// StoreReadGroupRequest represents a request to read group.
+type StoreReadGroupRequest struct {
+	ShardIDs []uint64
+	Request  datatypes.ReadGroupRequest
+}
+
+// MarshalBinary encodes r to a binary format.
+func (r *StoreReadGroupRequest) MarshalBinary() ([]byte, error) {
+	buf, err := r.Request.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	return proto.Marshal(&internal.StoreReadGroupRequest{
+		ShardIDs: r.ShardIDs,
+		Request:  buf,
+	})
+}
+
+// UnmarshalBinary decodes data into r.
+func (r *StoreReadGroupRequest) UnmarshalBinary(data []byte) error {
+	var pb internal.StoreReadGroupRequest
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return err
+	}
+	r.ShardIDs = pb.GetShardIDs()
+	if err := r.Request.Unmarshal(pb.GetRequest()); err != nil {
+		return err
+	}
+	return nil
+}
+
+// StoreReadGroupResponse represents a response from remote read group.
+type StoreReadGroupResponse struct {
+	Err error
+}
+
+// MarshalBinary encodes r to a binary format.
+func (r *StoreReadGroupResponse) MarshalBinary() ([]byte, error) {
+	var pb internal.StoreReadGroupResponse
+	if r.Err != nil {
+		pb.Err = proto.String(r.Err.Error())
+	}
+	return proto.Marshal(&pb)
+}
+
+// UnmarshalBinary decodes data into r.
+func (r *StoreReadGroupResponse) UnmarshalBinary(data []byte) error {
+	var pb internal.StoreReadGroupResponse
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return err
+	}
 	if pb.Err != nil {
 		r.Err = errors.New(pb.GetErr())
 	}
@@ -511,6 +745,7 @@ type CreateIteratorRequest struct {
 	ShardIDs    []uint64
 	Measurement influxql.Measurement
 	Opt         query.IteratorOptions
+	SpanContext tracing.SpanContext
 }
 
 // MarshalBinary encodes r to a binary format.
@@ -523,10 +758,15 @@ func (r *CreateIteratorRequest) MarshalBinary() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	sBuf, err := r.SpanContext.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
 	return proto.Marshal(&internal.CreateIteratorRequest{
 		ShardIDs:    r.ShardIDs,
 		Measurement: mBuf,
 		Opt:         oBuf,
+		SpanContext: sBuf,
 	})
 }
 
@@ -542,6 +782,9 @@ func (r *CreateIteratorRequest) UnmarshalBinary(data []byte) error {
 		return err
 	}
 	if err := r.Opt.UnmarshalBinary(pb.GetOpt()); err != nil {
+		return err
+	}
+	if err := r.SpanContext.UnmarshalBinary(pb.GetSpanContext()); err != nil {
 		return err
 	}
 	return nil
