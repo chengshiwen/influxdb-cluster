@@ -778,6 +778,14 @@ func (h *handler) serveShowShards(w http.ResponseWriter, r *http.Request) {
 			}(tcpAddr)
 		}
 		wg.Wait()
+
+		for _, si := range shardInfos {
+			for _, oi := range si.Owners {
+				if oi.State == "" && oi.Err == "" {
+					oi.Err = "not found"
+				}
+			}
+		}
 	}
 
 	w.Header().Add("Content-Type", "application/json")

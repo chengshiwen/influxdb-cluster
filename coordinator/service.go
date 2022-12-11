@@ -1052,26 +1052,26 @@ func (s *Service) processShowShardsRequest(conn net.Conn) {
 	shards := make(map[uint64]*meta.ShardOwnerInfo)
 	if err := func() error {
 		for _, id := range s.TSDBStore.ShardIDs() {
-			sh := s.TSDBStore.Shard(id)
-			if sh == nil {
-				continue
-			}
-			state := "hot"
-			if isIdle, _ := sh.IsIdle(); isIdle {
-				state = "cold"
-			}
-			size, err := sh.DiskSize()
 			owner := &meta.ShardOwnerInfo{
-				ID:           s.MetaClient.NodeID(),
-				TCPAddr:      s.Server.TCPAddr(),
-				State:        state,
-				LastModified: sh.LastModified(),
-				Size:         size,
+				ID:      s.MetaClient.NodeID(),
+				TCPAddr: s.Server.TCPAddr(),
 			}
-			if err != nil {
-				owner.Err = err.Error()
+			sh := s.TSDBStore.Shard(id)
+			if sh != nil {
+				owner.State = "hot"
+				if isIdle, _ := sh.IsIdle(); isIdle {
+					owner.State = "cold"
+				}
+				owner.LastModified = sh.LastModified()
+				if size, err := sh.DiskSize(); err != nil {
+					owner.Err = err.Error()
+				} else {
+					owner.Size = size
+				}
+			} else {
+				owner.Err = "not found"
 			}
-			shards[sh.ID()] = owner
+			shards[id] = owner
 		}
 
 		return nil
