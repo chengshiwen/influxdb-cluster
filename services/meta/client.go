@@ -172,6 +172,13 @@ func (c *Client) MetaServers() []string {
 	return c.metaServers
 }
 
+// TCPAddr returns the client's tcp addr.
+func (c *Client) TCPAddr() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.tcpAddr
+}
+
 // SetTCPAddr updates the tcp addr on the client.
 func (c *Client) SetTCPAddr(tcpAddr string) {
 	c.mu.Lock()

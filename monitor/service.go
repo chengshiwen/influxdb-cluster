@@ -56,7 +56,7 @@ type Monitor struct {
 
 	MetaClient interface {
 		ClusterID() uint64
-		NodeID() uint64
+		TCPAddr() string
 		CreateDatabaseWithRetentionPolicy(name string, spec *meta.RetentionPolicySpec) (*meta.DatabaseInfo, error)
 		Database(name string) *meta.DatabaseInfo
 	}
@@ -443,7 +443,7 @@ func (m *Monitor) storeStatistics() {
 			}()
 
 			m.SetGlobalTag("clusterID", m.MetaClient.ClusterID())
-			m.SetGlobalTag("nodeID", m.MetaClient.NodeID())
+			m.SetGlobalTag("nodeID", m.MetaClient.TCPAddr())
 			stats, err := m.Statistics(m.globalTags)
 			if err != nil {
 				m.Logger.Info("Failed to retrieve registered statistics", zap.Error(err))

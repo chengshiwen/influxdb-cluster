@@ -467,7 +467,7 @@ func (pw *PointsWriter) WritePoints(database, policy string, points models.Point
 
 type MetaClient struct {
 	ClusterIDFn                         func() uint64
-	NodeIDFn                            func() uint64
+	TCPAddrFn                           func() string
 	CreateDatabaseWithRetentionPolicyFn func(name string, spec *meta.RetentionPolicySpec) (*meta.DatabaseInfo, error)
 	DatabaseFn                          func(name string) *meta.DatabaseInfo
 }
@@ -476,8 +476,8 @@ func (m *MetaClient) ClusterID() uint64 {
 	return 0
 }
 
-func (m *MetaClient) NodeID() uint64 {
-	return 0
+func (m *MetaClient) TCPAddr() string {
+	return "0"
 }
 
 func (m *MetaClient) CreateDatabaseWithRetentionPolicy(name string, spec *meta.RetentionPolicySpec) (*meta.DatabaseInfo, error) {
