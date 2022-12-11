@@ -136,7 +136,7 @@ bash build.sh --help
 bash build.sh --package
 
 # Or to build all release packages by specifying the platform, arch, branch and version
-bash build.sh --platform all --arch all --branch master --version 1.8.10-c1.1.1 --clean --release --package
+bash build.sh --platform all --arch all --branch master --version 1.8.10-c1.1.2 --clean --release --package
 ```
 
 To run the tests, execute the following command:
@@ -162,7 +162,7 @@ Build and Push Multi-Arch Docker Images
 To build and push multi-arch docker images, run the following command:
 
 ```bash
-INFLUXDB_VERSION=1.8.10-c1.1.1
+INFLUXDB_VERSION=1.8.10-c1.1.2
 cd docker/data
 docker buildx build --platform linux/amd64,linux/arm64 --build-arg INFLUXDB_VERSION=${INFLUXDB_VERSION} --push -f Dockerfile -t chengshiwen/influxdb:${INFLUXDB_VERSION}-data .
 docker buildx build --platform linux/amd64,linux/arm64 --build-arg INFLUXDB_VERSION=${INFLUXDB_VERSION} --push -f Dockerfile_alpine -t chengshiwen/influxdb:${INFLUXDB_VERSION}-data-alpine .

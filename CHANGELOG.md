@@ -1,3 +1,20 @@
+v1.8.10-c1.1.2 [2022-12-11]
+-------------------
+
+### Features
+
+-	feat(flux): support [flux query language](https://docs.influxdata.com/influxdb/v1.8/flux/) in cluster
+-	chore(influxd-ctl): optimize `shard not found` tips in `influxd-ctl show-shards`
+-	chore(monitor): optimize `nodeID` value to tcp addr in statistics
+
+### Bugfixes
+
+-	fix(influxql): fix `show queries` and `kill query` statement in cluster
+-	fix(influxql): fix `explain` and `explain analyze` statement in cluster
+-	fix(influxql): fix `show measurement cardinality` and `show series cardinality` statement in cluster
+
+**Note**: All influxql ([influx query language](https://docs.influxdata.com/influxdb/v1.8/query_language/)) statements are already supported in cluster.
+
 v1.8.10-c1.1.1 [2022-10-16]
 -------------------
 
