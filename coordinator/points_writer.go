@@ -543,7 +543,7 @@ func (w *PointsWriter) writeToShardWithContext(ctx context.Context, shard *meta.
 				atomic.AddInt64(&w.stats.PointWriteReqHH, int64(len(points)))
 				hherr := w.HintedHandoff.WriteShard(shardID, owner.NodeID, points)
 				if hherr != nil {
-					w.Logger.Error("Write shard failed with hinted handoff", zap.Uint64("node_id", owner.NodeID), zap.Uint64("shard_id", shardID), zap.Error(hherr))
+					w.Logger.Warn("Write shard failed with hinted handoff", zap.Uint64("node_id", owner.NodeID), zap.Uint64("shard_id", shardID), zap.Error(hherr))
 					ch <- &AsyncWriteResult{owner, hherr}
 					return
 				}
@@ -558,7 +558,7 @@ func (w *PointsWriter) writeToShardWithContext(ctx context.Context, shard *meta.
 				atomic.AddInt64(&w.stats.PointWriteReqHH, int64(len(points)))
 				hherr := w.HintedHandoff.WriteShard(shardID, owner.NodeID, points)
 				if hherr != nil {
-					w.Logger.Error("Write shard failed with both shard writer and hinted handoff", zap.Uint64("node_id", owner.NodeID), zap.Uint64("shard_id", shardID), zap.Error(err))
+					w.Logger.Warn("Write shard failed with both shard writer and hinted handoff", zap.Uint64("node_id", owner.NodeID), zap.Uint64("shard_id", shardID), zap.Error(err))
 					ch <- &AsyncWriteResult{owner, hherr}
 					return
 				}
@@ -591,9 +591,9 @@ func (w *PointsWriter) writeToShardWithContext(ctx context.Context, shard *meta.
 			// If the write returned an error, continue to the next response
 			if result.Err != nil {
 				atomic.AddInt64(&w.stats.WriteErr, 1)
-				w.Logger.Error("Write failed", zap.Uint64("node_id", result.Owner.NodeID), zap.Uint64("shard_id", shard.ID), zap.Error(result.Err))
+				w.Logger.Info("Write failed", zap.Uint64("node_id", result.Owner.NodeID), zap.Uint64("shard_id", shard.ID), zap.Error(result.Err))
 
-				if result.Err.Error() == hh.ErrQueueBlocked.Error() {
+				if result.Err.Error() == hh.ErrHintedHandoffQueueNotEmpty.Error() || result.Err.Error() == hh.ErrQueueBlocked.Error() {
 					continue
 				}
 
