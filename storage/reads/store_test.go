@@ -87,6 +87,10 @@ func cursorToString(wr io.Writer, cur cursors.Cursor) {
 
 const nilVal = "<nil>"
 
+var (
+	nilValBytes = []byte(nilVal)
+)
+
 func joinString(b [][]byte) string {
 	s := make([]string, len(b))
 	for i := range b {
