@@ -65,6 +65,7 @@ type Config struct {
 	MaxConcurrentQueries  int           `toml:"max-concurrent-queries"`
 	QueryTimeout          toml.Duration `toml:"query-timeout"`
 	LogQueriesAfter       toml.Duration `toml:"log-queries-after"`
+	LogTimedOutQueries    bool          `toml:"log-timedout-queries"`
 	MaxSelectPointN       int           `toml:"max-select-point"`
 	MaxSelectSeriesN      int           `toml:"max-select-series"`
 	MaxSelectBucketsN     int           `toml:"max-select-buckets"`
@@ -83,6 +84,7 @@ func NewConfig() Config {
 		WriteTimeout:         toml.Duration(DefaultWriteTimeout),
 		QueryTimeout:         toml.Duration(query.DefaultQueryTimeout),
 		MaxConcurrentQueries: DefaultMaxConcurrentQueries,
+		LogTimedOutQueries:   false,
 		MaxSelectPointN:      DefaultMaxSelectPointN,
 		MaxSelectSeriesN:     DefaultMaxSelectSeriesN,
 		MaxSelectBucketsN:    DefaultMaxSelectBucketsN,
@@ -113,6 +115,7 @@ func (c Config) Diagnostics() (*diagnostics.Diagnostics, error) {
 		"max-concurrent-queries":    c.MaxConcurrentQueries,
 		"query-timeout":             c.QueryTimeout,
 		"log-queries-after":         c.LogQueriesAfter,
+		"log-timedout-queries":      c.LogTimedOutQueries,
 		"max-select-point":          c.MaxSelectPointN,
 		"max-select-series":         c.MaxSelectSeriesN,
 		"max-select-buckets":        c.MaxSelectBucketsN,
