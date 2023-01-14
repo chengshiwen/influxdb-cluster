@@ -4,7 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"log"
 	"net"
 	"time"
 
@@ -24,7 +24,7 @@ import (
 
 //go:generate protoc --gogo_out=. internal/data.proto
 
-// WriteShardRequest represents the a request to write a slice of points to a shard
+// WriteShardRequest represents a request to write a slice of points to a shard
 type WriteShardRequest struct {
 	pb internal.WriteShardRequest
 }
@@ -73,7 +73,7 @@ func (w *WriteShardRequest) AddPoints(points []models.Point) {
 			// A error here means that we create a point higher in the stack that we could
 			// not marshal to a byte slice.  If that happens, the endpoint that created that
 			// point needs to be fixed.
-			panic(fmt.Sprintf("failed to marshal point: `%v`: %v", p, err))
+			log.Printf("failed to marshal point: `%v`: %v", p, err)
 		}
 		w.pb.Points = append(w.pb.Points, b)
 	}
@@ -100,7 +100,7 @@ func (w *WriteShardRequest) unmarshalPoints() []models.Point {
 			// A error here means that one node created a valid point and sent us an
 			// unparseable version.  We could log and drop the point and allow
 			// anti-entropy to resolve the discrepancy, but this shouldn't ever happen.
-			panic(fmt.Sprintf("failed to parse point: `%v`: %v", string(p), err))
+			log.Printf("failed to parse point: `%v`: %v", string(p), err)
 		}
 
 		points[i] = pt
@@ -133,7 +133,7 @@ func (w *WriteShardResponse) UnmarshalBinary(buf []byte) error {
 	return nil
 }
 
-// ExecuteStatementRequest represents the a request to execute a statement on a node.
+// ExecuteStatementRequest represents a request to execute a statement on a node.
 type ExecuteStatementRequest struct {
 	pb internal.ExecuteStatementRequest
 }
@@ -197,7 +197,7 @@ func (w *ExecuteStatementResponse) UnmarshalBinary(buf []byte) error {
 	return nil
 }
 
-// TaskManagerStatementRequest represents the a request to execute a task manager statement on a node.
+// TaskManagerStatementRequest represents a request to execute a task manager statement on a node.
 type TaskManagerStatementRequest struct {
 	Statement string
 }
@@ -219,7 +219,7 @@ func (r *TaskManagerStatementRequest) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-// TaskManagerStatementResponse represents a response to show shards.
+// TaskManagerStatementResponse represents a response to task manager statement request.
 type TaskManagerStatementResponse struct {
 	Result query.Result
 	Err    error
@@ -944,7 +944,7 @@ func (r *FieldDimensionsRequest) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-// FieldDimensionsResponse represents a response from remote iterator creation.
+// FieldDimensionsResponse represents a response from remote fields & dimensions.
 type FieldDimensionsResponse struct {
 	Fields     map[string]influxql.DataType
 	Dimensions map[string]struct{}
