@@ -44,7 +44,7 @@ const (
 type RPCClient interface {
 	CopyShard(address, host, database, policy string, shardID uint64, since time.Time) error
 	RemoveShard(address string, shardID uint64) error
-	ShowShards(address string) (map[uint64]*ShardOwnerInfo, error)
+	ListShards(address string) (map[uint64]*ShardOwnerInfo, error)
 	JoinCluster(address string, metaServers []string, update bool) (*NodeInfo, error)
 	LeaveCluster(address string) error
 	RemoveHintedHandoff(address string, nodeID uint64) error
@@ -757,7 +757,7 @@ func (h *handler) serveShowShards(w http.ResponseWriter, r *http.Request) {
 			wg.Add(1)
 			go func(tcpAddr string) {
 				defer wg.Done()
-				shards, err := h.rpcClient.ShowShards(tcpAddr)
+				shards, err := h.rpcClient.ListShards(tcpAddr)
 				if err != nil || len(shards) == 0 {
 					return
 				}

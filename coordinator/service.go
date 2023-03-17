@@ -49,7 +49,7 @@ const (
 	statBackupShardReq      = "backupShardReq"
 	statCopyShardReq        = "copyShardReq"
 	statRemoveShardReq      = "removeShardReq"
-	statShowShardsReq       = "showShardsReq"
+	statListShardsReq       = "listShardsReq"
 )
 
 const (
@@ -107,8 +107,8 @@ const (
 	removeShardRequestMessage
 	removeShardResponseMessage
 
-	showShardsRequestMessage
-	showShardsResponseMessage
+	listShardsRequestMessage
+	listShardsResponseMessage
 
 	joinClusterRequestMessage
 	joinClusterResponseMessage
@@ -229,7 +229,7 @@ type Statistics struct {
 	BackupShardReq      int64
 	CopyShardReq        int64
 	RemoveShardReq      int64
-	ShowShardsReq       int64
+	ListShardsReq       int64
 }
 
 // Statistics returns statistics for periodic monitoring.
@@ -249,7 +249,7 @@ func (s *Service) Statistics(tags map[string]string) []models.Statistic {
 			statBackupShardReq:      atomic.LoadInt64(&s.stats.BackupShardReq),
 			statCopyShardReq:        atomic.LoadInt64(&s.stats.CopyShardReq),
 			statRemoveShardReq:      atomic.LoadInt64(&s.stats.RemoveShardReq),
-			statShowShardsReq:       atomic.LoadInt64(&s.stats.ShowShardsReq),
+			statListShardsReq:       atomic.LoadInt64(&s.stats.ListShardsReq),
 		},
 	}}
 }
@@ -414,9 +414,9 @@ func (s *Service) handleConn(conn net.Conn) {
 			atomic.AddInt64(&s.stats.RemoveShardReq, 1)
 			s.processRemoveShardRequest(conn)
 			return
-		case showShardsRequestMessage:
-			atomic.AddInt64(&s.stats.ShowShardsReq, 1)
-			s.processShowShardsRequest(conn)
+		case listShardsRequestMessage:
+			atomic.AddInt64(&s.stats.ListShardsReq, 1)
+			s.processListShardsRequest(conn)
 			return
 		case joinClusterRequestMessage:
 			s.processJoinClusterRequest(conn)
@@ -1247,7 +1247,7 @@ func (s *Service) processRemoveShardRequest(conn net.Conn) {
 	}
 }
 
-func (s *Service) processShowShardsRequest(conn net.Conn) {
+func (s *Service) processListShardsRequest(conn net.Conn) {
 	shards := make(map[uint64]*meta.ShardOwnerInfo)
 	if err := func() error {
 		for _, id := range s.TSDBStore.ShardIDs() {
@@ -1275,14 +1275,14 @@ func (s *Service) processShowShardsRequest(conn net.Conn) {
 
 		return nil
 	}(); err != nil {
-		s.Logger.Error("Error reading ShowShards request", zap.Error(err))
-		EncodeTLV(conn, showShardsResponseMessage, &ShowShardsResponse{Err: err})
+		s.Logger.Error("Error reading ListShards request", zap.Error(err))
+		EncodeTLV(conn, listShardsResponseMessage, &ListShardsResponse{Err: err})
 		return
 	}
 
 	// Encode success response.
-	if err := EncodeTLV(conn, showShardsResponseMessage, &ShowShardsResponse{Shards: shards}); err != nil {
-		s.Logger.Error("Error writing ShowShards response", zap.Error(err))
+	if err := EncodeTLV(conn, listShardsResponseMessage, &ListShardsResponse{Shards: shards}); err != nil {
+		s.Logger.Error("Error writing ListShards response", zap.Error(err))
 		return
 	}
 }

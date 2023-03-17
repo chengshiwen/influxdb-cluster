@@ -1262,14 +1262,14 @@ func (r *RemoveShardResponse) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-// ShowShardsResponse represents a response to show shards.
-type ShowShardsResponse struct {
+// ListShardsResponse represents a response to list shards.
+type ListShardsResponse struct {
 	Shards map[uint64]*meta.ShardOwnerInfo
 	Err    error
 }
 
-func (r *ShowShardsResponse) MarshalBinary() ([]byte, error) {
-	var pb internal.ShowShardsResponse
+func (r *ListShardsResponse) MarshalBinary() ([]byte, error) {
+	var pb internal.ListShardsResponse
 	buf, err := json.Marshal(r.Shards)
 	if err != nil {
 		return nil, err
@@ -1281,8 +1281,8 @@ func (r *ShowShardsResponse) MarshalBinary() ([]byte, error) {
 	return proto.Marshal(&pb)
 }
 
-func (r *ShowShardsResponse) UnmarshalBinary(data []byte) error {
-	var pb internal.ShowShardsResponse
+func (r *ListShardsResponse) UnmarshalBinary(data []byte) error {
+	var pb internal.ListShardsResponse
 	if err := proto.Unmarshal(data, &pb); err != nil {
 		return err
 	}
@@ -1512,7 +1512,7 @@ func (c *Client) RemoveShard(address string, shardID uint64) error {
 	return resp.Err
 }
 
-func (c *Client) ShowShards(address string) (map[uint64]*meta.ShardOwnerInfo, error) {
+func (c *Client) ListShards(address string) (map[uint64]*meta.ShardOwnerInfo, error) {
 	conn, err := c.dial(address)
 	if err != nil {
 		return nil, err
@@ -1520,7 +1520,7 @@ func (c *Client) ShowShards(address string) (map[uint64]*meta.ShardOwnerInfo, er
 	defer conn.Close()
 
 	// Send request.
-	err = WriteType(conn, showShardsRequestMessage)
+	err = WriteType(conn, listShardsRequestMessage)
 	if err != nil {
 		return nil, err
 	}
@@ -1532,7 +1532,7 @@ func (c *Client) ShowShards(address string) (map[uint64]*meta.ShardOwnerInfo, er
 	}
 
 	// Unmarshal response.
-	var resp ShowShardsResponse
+	var resp ListShardsResponse
 	if err = resp.UnmarshalBinary(buf); err != nil {
 		return nil, err
 	}

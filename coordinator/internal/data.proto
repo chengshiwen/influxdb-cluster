@@ -202,7 +202,7 @@ message RemoveShardResponse {
     optional string Err = 1;
 }
 
-message ShowShardsResponse {
+message ListShardsResponse {
     required bytes  Shards = 1;
     optional string Err    = 2;
 }
