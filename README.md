@@ -38,11 +38,11 @@ Please see: [Clustering in InfluxDB Enterprise](https://docs.influxdata.com/ente
 
 Architectural overview:
 
-![architecture.png](https://iili.io/Vw1XTB.png)
+![architecture.png](https://github.com/chengshiwen/influxdb-cluster/wiki/image/architecture.png)
 
 Network overview:
 
-![architecture](https://docs.influxdata.com/img/enterprise/1-8-network-diagram.png)
+![network-architecture](https://docs.influxdata.com/img/enterprise/1-8-network-diagram.png)
 
 ## Installation
 
