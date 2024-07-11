@@ -1326,10 +1326,12 @@ type JoinClusterResponse struct {
 
 func (r *JoinClusterResponse) MarshalBinary() ([]byte, error) {
 	var pb internal.JoinClusterResponse
-	pb.Node = &internal.NodeInfo{
-		ID:      proto.Uint64(r.Node.ID),
-		Addr:    proto.String(r.Node.Addr),
-		TCPAddr: proto.String(r.Node.TCPAddr),
+	if r.Node != nil {
+		pb.Node = &internal.NodeInfo{
+			ID:      proto.Uint64(r.Node.ID),
+			Addr:    proto.String(r.Node.Addr),
+			TCPAddr: proto.String(r.Node.TCPAddr),
+		}
 	}
 	if r.Err != nil {
 		pb.Err = proto.String(r.Err.Error())
