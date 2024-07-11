@@ -1,4 +1,4 @@
-FROM buildpack-deps:stretch-curl
+FROM buildpack-deps:bookworm-curl
 
 ARG TARGETARCH
 ARG INFLUXDB_VERSION

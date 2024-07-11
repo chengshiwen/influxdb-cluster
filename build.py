@@ -221,7 +221,7 @@ def run_tests(race, parallel, timeout, no_vet, run_gen, junit=False):
             return False
     else:
         logging.info("Skipping 'go vet' call...")
-    test_command = "go test -v"
+    test_command = "go test"
     if race:
         test_command += " -race"
     if parallel is not None:

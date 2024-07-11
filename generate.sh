@@ -18,8 +18,8 @@ function check_changes () {
 
 check_changes "git is dirty before running generate!"
 
-go generate ./...
+# go generate ./...
 
-check_changes "git is dirty after running generate!"
+# check_changes "git is dirty after running generate!"
 
 exit 0

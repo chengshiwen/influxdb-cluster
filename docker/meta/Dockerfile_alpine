@@ -1,4 +1,4 @@
-FROM alpine:3.14
+FROM alpine:3.20
 
 RUN echo 'hosts: files dns' >> /etc/nsswitch.conf
 RUN apk add --no-cache tzdata bash ca-certificates && \

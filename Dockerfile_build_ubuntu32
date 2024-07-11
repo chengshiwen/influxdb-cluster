@@ -1,6 +1,6 @@
 FROM ioft/i386-ubuntu:xenial
 
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     python-software-properties \
     software-properties-common \
     wget \
@@ -18,15 +18,15 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     python \
     python-boto
 
-RUN gem install fpm
+RUN gem install childprocess:3.0.0 dotenv:2.8.1 ffi:1.12.2 fpm:1.11.0
 
 # setup environment
-ENV GO_VERSION  1.16.15
-ENV GOARCH      386
-ENV GOROOT      /usr/local/go
-ENV GOPATH      /root/go
-ENV PATH        $GOPATH/bin:$GOROOT/bin:$PATH
-ENV PROJECT_DIR /root/influxdb
+ENV GO_VERSION=1.16.15
+ENV GOARCH=386
+ENV GOROOT=/usr/local/go
+ENV GOPATH=/root/go
+ENV PATH=$GOPATH/bin:$GOROOT/bin:$PATH
+ENV PROJECT_DIR=/root/influxdb
 
 # install go
 RUN wget --no-verbose https://storage.googleapis.com/golang/go${GO_VERSION}.linux-${GOARCH}.tar.gz -O- | tar -C /usr/local/ -zxf-
