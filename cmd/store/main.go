@@ -1,4 +1,4 @@
-//+build ignore
+//go:build ignore
 
 // The store command displays detailed information about InfluxDB data files.
 package main
