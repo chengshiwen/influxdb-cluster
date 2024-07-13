@@ -19,6 +19,7 @@ import (
 	"reflect"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
@@ -246,8 +247,8 @@ func (c *Client) acquireLease(name string) (*Lease, error) {
 		return nil, ErrServiceUnavailable
 	}
 	server := c.metaServers[0]
-	c.mu.RUnlock()
 	url := fmt.Sprintf("%s/lease?name=%s&nodeid=%d", c.url(server), name, c.nodeID)
+	c.mu.RUnlock()
 
 	resp, err := c.client.Get(url)
 	if err != nil {
@@ -1280,7 +1281,8 @@ func (c *Client) url(server string) string {
 }
 
 func (c *Client) retryUntilSnapshot(idx uint64) *Data {
-	printErr := true
+	var errPrint atomic.Value
+	errPrint.Store(true)
 	currentServer := 0
 	for {
 		// get the index to look from and the server to poll
@@ -1313,12 +1315,12 @@ func (c *Client) retryUntilSnapshot(idx uint64) *Data {
 			return data
 		}
 
-		if printErr {
+		if errPrint.Load().(bool) {
 			c.logger.Info("Failure getting snapshot", zap.String("server", server), zap.Error(err))
-			printErr = false
+			errPrint.Store(false)
 			go func() {
 				<-time.After(30 * errSleep)
-				printErr = true
+				errPrint.Store(true)
 			}()
 		}
 		time.Sleep(errSleep)
