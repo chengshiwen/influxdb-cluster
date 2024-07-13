@@ -8,10 +8,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/hashicorp/raft"
 	"go.uber.org/zap"
 )
 
@@ -24,7 +22,6 @@ type Service struct {
 	RPCClient RPCClient
 	Version   string
 
-	mu        sync.RWMutex
 	config    *Config
 	handler   *handler
 	ln        net.Listener
@@ -180,14 +177,6 @@ func (s *Service) Close() error {
 	}
 
 	return nil
-}
-
-// State returns the state of this raft peer.
-func (s *Service) State() raft.RaftState {
-	if s.store == nil {
-		return raft.Shutdown
-	}
-	return s.store.state()
 }
 
 // HTTPAddr returns the bind address for the HTTP API

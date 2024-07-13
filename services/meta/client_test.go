@@ -20,8 +20,8 @@ import (
 func TestMetaClient_CreateDatabaseOnly(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -52,8 +52,8 @@ func TestMetaClient_CreateDatabaseOnly(t *testing.T) {
 func TestMetaClient_CreateDatabaseIfNotExists(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -76,8 +76,8 @@ func TestMetaClient_CreateDatabaseIfNotExists(t *testing.T) {
 func TestMetaClient_CreateDatabaseWithRetentionPolicy(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -138,8 +138,8 @@ func TestMetaClient_CreateDatabaseWithRetentionPolicy(t *testing.T) {
 func TestMetaClient_CreateDatabaseWithRetentionPolicy_Conflict_Fields(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -189,8 +189,8 @@ func TestMetaClient_CreateDatabaseWithRetentionPolicy_Conflict_Fields(t *testing
 func TestMetaClient_CreateDatabaseWithRetentionPolicy_Conflict_NonDefault(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -225,8 +225,8 @@ func TestMetaClient_CreateDatabaseWithRetentionPolicy_Conflict_NonDefault(t *tes
 func TestMetaClient_Databases(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -263,8 +263,8 @@ func TestMetaClient_Databases(t *testing.T) {
 func TestMetaClient_DropDatabase(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -296,8 +296,8 @@ func TestMetaClient_DropDatabase(t *testing.T) {
 func TestMetaClient_CreateRetentionPolicy(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -414,8 +414,8 @@ func TestMetaClient_CreateRetentionPolicy(t *testing.T) {
 func TestMetaClient_DefaultRetentionPolicy(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -456,8 +456,8 @@ func TestMetaClient_DefaultRetentionPolicy(t *testing.T) {
 func TestMetaClient_UpdateRetentionPolicy(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -538,8 +538,8 @@ func TestMetaClient_UpdateRetentionPolicy(t *testing.T) {
 func TestMetaClient_DropRetentionPolicy(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -590,8 +590,8 @@ func TestMetaClient_DropRetentionPolicy(t *testing.T) {
 func TestMetaClient_CreateUser(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -761,8 +761,8 @@ func TestMetaClient_CreateUser(t *testing.T) {
 func TestMetaClient_UpdateUser(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -775,8 +775,8 @@ func TestMetaClient_UpdateUser(t *testing.T) {
 func TestMetaClient_ContinuousQueries(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -832,8 +832,8 @@ func TestMetaClient_ContinuousQueries(t *testing.T) {
 func TestMetaClient_Subscriptions_Create(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -890,8 +890,8 @@ func TestMetaClient_Subscriptions_Create(t *testing.T) {
 func TestMetaClient_Subscriptions_Drop(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -903,7 +903,7 @@ func TestMetaClient_Subscriptions_Drop(t *testing.T) {
 	// DROP SUBSCRIPTION returns ErrSubscriptionNotFound when the
 	// subscription is unknown.
 	err := c.DropSubscription("db0", "autogen", "foo")
-	if got, exp := err, meta.ErrSubscriptionNotFound; got.Error() != exp.Error() {
+	if got, exp := err, meta.ErrSubscriptionNotFound; got == nil || got.Error() != exp.Error() {
 		t.Fatalf("got: %s, exp: %s", got, exp)
 	}
 
@@ -936,8 +936,8 @@ func TestMetaClient_Subscriptions_Drop(t *testing.T) {
 func TestMetaClient_Shards(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -1003,8 +1003,8 @@ func TestMetaClient_Shards(t *testing.T) {
 func TestMetaClient_CreateShardGroupIdempotent(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -1062,8 +1062,8 @@ func TestMetaClient_CreateShardGroupIdempotent(t *testing.T) {
 func TestMetaClient_PruneShardGroups(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -1146,10 +1146,13 @@ func TestMetaClient_PruneShardGroups(t *testing.T) {
 func TestMetaClient_PersistClusterIDAfterRestart(t *testing.T) {
 	t.Parallel()
 
-	cfg := newConfig(true)
+	cfg := newConfig()
+	cfg.SingleServer = true
 	defer os.RemoveAll(cfg.Dir)
 	s := newService(cfg)
-	s.open()
+	if err := s.Open(); err != nil {
+		t.Fatal(err)
+	}
 	defer s.Close()
 
 	c := meta.NewClient(cfg)
@@ -1164,7 +1167,9 @@ func TestMetaClient_PersistClusterIDAfterRestart(t *testing.T) {
 
 	s.Close()
 	s = newService(cfg)
-	s.open()
+	if err := s.Open(); err != nil {
+		t.Fatal(err)
+	}
 	defer s.Close()
 
 	c = meta.NewClient(cfg)
@@ -1191,11 +1196,10 @@ func newClient(cfg *meta.Config) *meta.Client {
 	return c
 }
 
-func newConfig(singleServer bool) *meta.Config {
+func newConfig() *meta.Config {
 	cfg := meta.NewConfig()
 	cfg.BindAddress = freePort()
 	cfg.HTTPBindAddress = freePort()
-	cfg.SingleServer = singleServer
 	cfg.Dir = testTempDir(2)
 	cfg.LeaseDuration = toml.Duration(1 * time.Second)
 	return cfg

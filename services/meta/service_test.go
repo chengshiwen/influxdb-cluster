@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hashicorp/raft"
 	"github.com/influxdata/influxdb/cmd/influxd-ctl/common"
 	"github.com/influxdata/influxdb/services/meta"
 	"github.com/influxdata/influxdb/tcp"
@@ -25,11 +24,11 @@ func TestMetaService_CreateRemoveMetaNode(t *testing.T) {
 	metaServers := freePorts(4)
 	raftPeers := freePorts(4)
 
-	cfg1 := newConfig(false)
+	cfg1 := newConfig()
 	cfg1.HTTPBindAddress = metaServers[0]
 	cfg1.BindAddress = raftPeers[0]
 	defer os.RemoveAll(cfg1.Dir)
-	cfg2 := newConfig(false)
+	cfg2 := newConfig()
 	cfg2.HTTPBindAddress = metaServers[1]
 	cfg2.BindAddress = raftPeers[1]
 	defer os.RemoveAll(cfg2.Dir)
@@ -39,14 +38,18 @@ func TestMetaService_CreateRemoveMetaNode(t *testing.T) {
 	s1 := newService(cfg1)
 	go func() {
 		defer wg.Done()
-		s1.open()
+		if err := s1.Open(); err != nil {
+			t.Fatal(err)
+		}
 	}()
 	defer s1.Close()
 
 	s2 := newService(cfg2)
 	go func() {
 		defer wg.Done()
-		s2.open()
+		if err := s2.Open(); err != nil {
+			t.Fatal(err)
+		}
 	}()
 	defer s2.Close()
 	wg.Wait()
@@ -55,13 +58,15 @@ func TestMetaService_CreateRemoveMetaNode(t *testing.T) {
 		t.Fatalf("error join peers")
 	}
 
-	cfg3 := newConfig(false)
+	cfg3 := newConfig()
 	cfg3.HTTPBindAddress = metaServers[2]
 	cfg3.BindAddress = raftPeers[2]
 	defer os.RemoveAll(cfg3.Dir)
 
 	s3 := newService(cfg3)
-	s3.open()
+	if err := s3.Open(); err != nil {
+		t.Fatal(err)
+	}
 	defer s3.Close()
 
 	if err := joinPeers(metaServers[0:3]); err != nil {
@@ -96,13 +101,15 @@ func TestMetaService_CreateRemoveMetaNode(t *testing.T) {
 		t.Fatalf("meta nodes wrong: %v", metaNodes)
 	}
 
-	cfg4 := newConfig(false)
+	cfg4 := newConfig()
 	cfg4.HTTPBindAddress = metaServers[3]
 	cfg4.BindAddress = raftPeers[3]
 	defer os.RemoveAll(cfg4.Dir)
 
 	s4 := newService(cfg4)
-	s4.open()
+	if err := s4.Open(); err != nil {
+		t.Fatal(err)
+	}
 	defer s4.Close()
 
 	metaServers4 := []string{metaServers[0], metaServers[1], metaServers[3]}
@@ -137,14 +144,16 @@ func TestMetaService_CommandAgainstNonLeader(t *testing.T) {
 	wg.Add(len(cfgs))
 
 	for i, _ := range cfgs {
-		c := newConfig(false)
+		c := newConfig()
 		c.HTTPBindAddress = metaServers[i]
 		cfgs[i] = c
 
 		srvs[i] = newService(c)
 		go func(srv *testService) {
 			defer wg.Done()
-			srv.open()
+			if err := srv.Open(); err != nil {
+				t.Fatal(err)
+			}
 		}(srvs[i])
 		defer srvs[i].Close()
 		defer os.RemoveAll(c.Dir)
@@ -191,16 +200,19 @@ func TestMetaService_FailureAndRestartCluster(t *testing.T) {
 	var swg sync.WaitGroup
 	swg.Add(len(cfgs))
 	for i, _ := range cfgs {
-		c := newConfig(false)
+		c := newConfig()
 		c.HTTPBindAddress = metaServers[i]
 		c.BindAddress = raftPeers[i]
 		cfgs[i] = c
 
 		srvs[i] = newService(c)
-		go func(srv *testService) {
+		go func(i int, srv *testService) {
 			defer swg.Done()
-			srv.open()
-		}(srvs[i])
+			if err := srv.Open(); err != nil {
+				t.Logf("opening server %d", i)
+				t.Fatal(err)
+			}
+		}(i, srvs[i])
 
 		defer srvs[i].Close()
 		defer os.RemoveAll(c.Dir)
@@ -302,13 +314,16 @@ func TestMetaService_NameChangeSingleNode(t *testing.T) {
 	t.Skip("not enabled")
 	t.Parallel()
 
-	cfg := newConfig(true)
+	cfg := newConfig()
+	cfg.SingleServer = true
 	defer os.RemoveAll(cfg.Dir)
 
 	cfg.BindAddress = "foobar:0"
 	cfg.HTTPBindAddress = "foobar:0"
 	s := newService(cfg)
-	s.open()
+	if err := s.Open(); err != nil {
+		t.Fatal(err)
+	}
 	defer s.Close()
 
 	c := meta.NewClient(cfg)
@@ -328,7 +343,9 @@ func TestMetaService_NameChangeSingleNode(t *testing.T) {
 	cfg.BindAddress = "asdf" + ":" + strings.Split(s.RaftAddr(), ":")[1]
 	cfg.HTTPBindAddress = "asdf" + ":" + strings.Split(s.HTTPAddr(), ":")[1]
 	s = newService(cfg)
-	s.open()
+	if err := s.Open(); err != nil {
+		t.Fatal(err)
+	}
 	defer s.Close()
 
 	c2 := meta.NewClient(cfg)
@@ -355,8 +372,8 @@ func TestMetaService_NameChangeSingleNode(t *testing.T) {
 func TestMetaService_CreateDataNode(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -385,8 +402,8 @@ func TestMetaService_CreateDataNode(t *testing.T) {
 func TestMetaService_DropDataNode(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -461,8 +478,8 @@ func TestMetaService_DropDataNode(t *testing.T) {
 func TestMetaService_DropDataNode_Reassign(t *testing.T) {
 	t.Parallel()
 
-	f, s, c := newServiceAndClient(true)
-	defer os.RemoveAll(f.Dir)
+	d, s, c := newServiceAndClient()
+	defer os.RemoveAll(d)
 	defer s.Close()
 	defer c.Close()
 
@@ -534,15 +551,17 @@ func TestMetaService_Ping(t *testing.T) {
 	swg.Add(len(cfgs))
 
 	for i := range cfgs {
-		c := newConfig(false)
+		c := newConfig()
 		c.HTTPBindAddress = metaServers[i]
 		cfgs[i] = c
 
 		srvs[i] = newService(c)
-		go func(srv *testService) {
+		go func(i int, srv *testService) {
 			defer swg.Done()
-			srv.open()
-		}(srvs[i])
+			if err := srv.Open(); err != nil {
+				t.Fatalf("error opening server %d: %s", i, err)
+			}
+		}(i, srvs[i])
 		defer srvs[i].Close()
 		defer os.RemoveAll(c.Dir)
 	}
@@ -582,10 +601,13 @@ func TestMetaService_Ping(t *testing.T) {
 func TestMetaService_AcquireLease(t *testing.T) {
 	t.Parallel()
 
-	cfg := newConfig(true)
+	cfg := newConfig()
+	cfg.SingleServer = true
 	defer os.RemoveAll(cfg.Dir)
 	s := newService(cfg)
-	s.open()
+	if err := s.Open(); err != nil {
+		panic(err)
+	}
 	defer s.Close()
 
 	c1 := meta.NewClient(cfg)
@@ -651,12 +673,17 @@ func TestMetaService_AcquireLease(t *testing.T) {
 
 // newServiceAndClient returns new data directory, *Service, and *Client or panics.
 // Caller is responsible for deleting data dir and closing client.
-func newServiceAndClient(singleServer bool) (*meta.Config, *testService, *meta.Client) {
-	cfg := newConfig(singleServer)
+func newServiceAndClient() (string, *testService, *meta.Client) {
+	cfg := newConfig()
+	cfg.SingleServer = true
 	s := newService(cfg)
-	s.open()
+	if err := s.Open(); err != nil {
+		panic(err)
+	}
+
 	c := newClient(cfg)
-	return cfg, s, c
+
+	return cfg.Dir, s, c
 }
 
 type testService struct {
@@ -665,38 +692,17 @@ type testService struct {
 	ss bool
 }
 
-func (t *testService) open() {
+func (t *testService) Open() error {
 	if t.ss {
-		t.Open()
+		return t.Service.Open()
 	} else {
 		go func() {
-			t.Open()
+			if err := t.Service.Open(); err != nil {
+				panic(err)
+			}
 		}()
-		t.waitForFollower(0)
-	}
-}
-
-// waitForFollower sleeps until a follower is found or a timeout occurs.
-// timeout == 0 means to wait forever.
-func (t *testService) waitForFollower(timeout time.Duration) error {
-	// Begin timeout timer.
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-
-	// Continually check for follower until timeout.
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-timer.C:
-			if timeout != 0 {
-				return errors.New("timeout")
-			}
-		case <-ticker.C:
-			if t.State() == raft.Follower {
-				return nil
-			}
-		}
+		time.Sleep(2 * time.Second)
+		return nil
 	}
 }
 
@@ -750,7 +756,7 @@ func joinPeers(peers []string) error {
 	}
 
 	for _, peer := range peers {
-		cfg := newConfig(false)
+		cfg := newConfig()
 		c := meta.NewClient(cfg)
 		c.SetMetaServers([]string{peer})
 		if err := c.Open(); err != nil {
