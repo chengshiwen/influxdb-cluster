@@ -21,7 +21,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 RUN gem install childprocess:3.0.0 dotenv:2.8.1 ffi:1.12.2 fpm:1.11.0
 
 # setup environment
-ENV GO_VERSION=1.16.15
+ENV GO_VERSION=1.21.13
 ENV GOARCH=386
 ENV GOROOT=/usr/local/go
 ENV GOPATH=/root/go

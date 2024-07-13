@@ -26,7 +26,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 RUN gem install dotenv:2.8.1 fpm:1.15.1
 
 # setup environment
-ENV GO_VERSION=1.16.15
+ENV GO_VERSION=1.21.13
 ENV GOARCH=amd64
 ENV GOROOT=/usr/local/go
 ENV GOPATH=/root/go

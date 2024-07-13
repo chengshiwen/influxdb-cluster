@@ -59,7 +59,7 @@ To assist in review for the PR, please add the following to your pull request co
 
 Installing Go
 -------------
-InfluxDB Cluster requires Go 1.16
+InfluxDB Cluster requires Go 1.21
 
 At InfluxDB Cluster we find gvm, a Go version manager, useful for installing Go. For instructions
 on how to install it see [the gvm page on github](https://github.com/moovweb/gvm).
@@ -67,8 +67,8 @@ on how to install it see [the gvm page on github](https://github.com/moovweb/gvm
 After installing gvm you can install and set the default go version by
 running the following:
 
-    gvm install go1.16
-    gvm use go1.16 --default
+    gvm install go1.21
+    gvm use go1.21 --default
 
 Revision Control Systems
 -------------
