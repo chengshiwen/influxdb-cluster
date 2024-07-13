@@ -66,7 +66,9 @@ func TestStoreStream_ResultSet(t *testing.T) {
 		rw := reads.NewResponseWriter(stream, 0)
 		err := rw.WriteResultSet(rs)
 		if err != nil {
-			t.Fatal(err)
+			t.Log(err)
+			t.Fail()
+			return
 		}
 		rw.Flush()
 	}()
@@ -78,7 +80,9 @@ func TestStoreStream_ResultSet(t *testing.T) {
 
 		rr, err := stream.Recv()
 		if err != nil {
-			t.Fatal(err)
+			t.Log(err)
+			t.Fail()
+			return
 		}
 
 		if len(rr.Frames) != 2 {
@@ -165,7 +169,9 @@ func TestStoreStream_GroupResultSet(t *testing.T) {
 		rw := reads.NewResponseWriter(stream, 0)
 		err := rw.WriteGroupResultSet(rs)
 		if err != nil {
-			t.Fatal(err)
+			t.Log(err)
+			t.Fail()
+			return
 		}
 		rw.Flush()
 	}()
@@ -177,7 +183,9 @@ func TestStoreStream_GroupResultSet(t *testing.T) {
 
 		rr, err := stream.Recv()
 		if err != nil {
-			t.Fatal(err)
+			t.Log(err)
+			t.Fail()
+			return
 		}
 
 		if len(rr.Frames) != 3 {

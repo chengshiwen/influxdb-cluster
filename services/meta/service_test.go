@@ -39,7 +39,9 @@ func TestMetaService_CreateRemoveMetaNode(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		if err := s1.Open(); err != nil {
-			t.Fatal(err)
+			t.Log(err)
+			t.Fail()
+			return
 		}
 	}()
 	defer s1.Close()
@@ -48,7 +50,9 @@ func TestMetaService_CreateRemoveMetaNode(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		if err := s2.Open(); err != nil {
-			t.Fatal(err)
+			t.Log(err)
+			t.Fail()
+			return
 		}
 	}()
 	defer s2.Close()
@@ -152,7 +156,9 @@ func TestMetaService_CommandAgainstNonLeader(t *testing.T) {
 		go func(srv *testService) {
 			defer wg.Done()
 			if err := srv.Open(); err != nil {
-				t.Fatal(err)
+				t.Log(err)
+				t.Fail()
+				return
 			}
 		}(srvs[i])
 		defer srvs[i].Close()
@@ -210,7 +216,9 @@ func TestMetaService_FailureAndRestartCluster(t *testing.T) {
 			defer swg.Done()
 			if err := srv.Open(); err != nil {
 				t.Logf("opening server %d", i)
-				t.Fatal(err)
+				t.Log(err)
+				t.Fail()
+				return
 			}
 		}(i, srvs[i])
 
@@ -559,7 +567,9 @@ func TestMetaService_Ping(t *testing.T) {
 		go func(i int, srv *testService) {
 			defer swg.Done()
 			if err := srv.Open(); err != nil {
-				t.Fatalf("error opening server %d: %s", i, err)
+				t.Logf("error opening server %d: %s", i, err)
+				t.Fail()
+				return
 			}
 		}(i, srvs[i])
 		defer srvs[i].Close()
