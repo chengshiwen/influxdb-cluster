@@ -107,16 +107,17 @@ func (n *NodeProcessor) Open() error {
 // When closed it will not accept hinted-handoff data.
 func (n *NodeProcessor) Close() error {
 	n.mu.Lock()
-	defer n.mu.Unlock()
 
 	if n.done == nil {
 		// Already closed.
+		n.mu.Unlock()
 		return nil
 	}
 
 	close(n.done)
-	n.wg.Wait()
 	n.done = nil
+	n.mu.Unlock()
+	n.wg.Wait()
 
 	return n.queue.Close()
 }
