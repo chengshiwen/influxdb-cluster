@@ -43,9 +43,9 @@ func (c *clientPool) size() int {
 
 func (c *clientPool) conn(nodeID uint64) (net.Conn, error) {
 	c.mu.RLock()
-	conn, err := c.pool[nodeID].Get()
+	p := c.pool[nodeID]
 	c.mu.RUnlock()
-	return conn, err
+	return p.Get()
 }
 
 func (c *clientPool) close() {
