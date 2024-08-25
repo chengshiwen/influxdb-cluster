@@ -28,6 +28,7 @@ type NodeProcessor struct {
 	nodeID           uint64
 	shardID          uint64
 	dir              string
+	closing          bool
 
 	mu   sync.RWMutex
 	wg   sync.WaitGroup
@@ -81,6 +82,7 @@ func (n *NodeProcessor) Open() error {
 		return nil
 	}
 	n.done = make(chan struct{})
+	n.closing = false
 
 	// Create the queue directory if it doesn't already exist.
 	if err := os.MkdirAll(n.dir, 0700); err != nil {
@@ -108,16 +110,17 @@ func (n *NodeProcessor) Open() error {
 func (n *NodeProcessor) Close() error {
 	n.mu.Lock()
 
-	if n.done == nil {
-		// Already closed.
+	if n.closing || n.done == nil {
+		// Closing or already closed.
 		n.mu.Unlock()
 		return nil
 	}
 
 	close(n.done)
-	n.done = nil
+	n.closing = true
 	n.mu.Unlock()
 	n.wg.Wait()
+	n.done = nil
 
 	return n.queue.Close()
 }
