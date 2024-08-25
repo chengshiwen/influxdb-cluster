@@ -106,19 +106,35 @@ func (n *NodeProcessor) Open() error {
 // Close closes the NodeProcessor, terminating all data tranmission to the node.
 // When closed it will not accept hinted-handoff data.
 func (n *NodeProcessor) Close() error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	if wait := func() bool {
+		n.mu.Lock()
+		defer n.mu.Unlock()
 
-	if n.done == nil {
-		// Already closed.
+		if n.closed() {
+			return false // Already closed.
+		}
+		close(n.done)
+		return true
+	}(); !wait {
 		return nil
 	}
-
-	close(n.done)
 	n.wg.Wait()
-	n.done = nil
 
+	// Release all remaining resources.
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.done = nil
 	return n.queue.Close()
+}
+
+func (n *NodeProcessor) closed() bool {
+	select {
+	case <-n.done:
+		// NodeProcessor is closing.
+		return true
+	default:
+	}
+	return n.done == nil
 }
 
 // Statistics returns statistics for periodic monitoring.
@@ -148,7 +164,7 @@ func (n *NodeProcessor) Purge() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if n.done != nil {
+	if !n.closed() {
 		return fmt.Errorf("node processor is open")
 	}
 
@@ -161,7 +177,7 @@ func (n *NodeProcessor) WriteShard(points []models.Point) error {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 
-	if n.done == nil {
+	if n.closed() {
 		return fmt.Errorf("node processor is closed")
 	}
 
