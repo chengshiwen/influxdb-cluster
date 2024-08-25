@@ -1,9 +1,6 @@
 # Keep editor-specific, non-project specific ignore rules in global .gitignore:
 # https://help.github.com/articles/ignoring-files/#create-a-global-gitignore
 
-.idea/
-build/
-
 *~
 src/
 
@@ -11,6 +8,12 @@ config.json
 /bin/
 
 /query/a.out*
+
+# dev files
+/build/
+/cert/
+/docker-compose.yml
+/Makefile
 
 # ignore generated files.
 cmd/influxd/version.go
