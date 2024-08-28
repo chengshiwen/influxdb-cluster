@@ -5,13 +5,13 @@
 # field and the default value used. Uncommenting a line and changing the value
 # will change the value used at runtime when the process is restarted.
 
-# Once every 24 hours InfluxDB Cluster will report usage data in log output
+# Once every 24 hours InfluxDB Cluster will report usage data in the log output.
 # The data includes a random ID, os, arch, version, the number of series and other
 # usage data. No data from user databases is ever transmitted.
 # Change this option to true to disable reporting.
 # reporting-disabled = false
 
-# The TCP bind address to use for cluster-internal services.
+# The TCP bind address to use for the cluster-internal meta services.
 # bind-address = ":8091"
 
 # Hostname advertised by this host for remote addresses. This must be resolvable by all
@@ -28,7 +28,7 @@
   # Directory where cluster meta data is stored.
   dir = "/var/lib/influxdb/meta"
 
-  # The default address for meta node communication
+  # The default address for raft, cluster, snapshot, etc.
   # bind-address = ":8089"
 
   # The default address to bind the API to.
@@ -119,36 +119,42 @@
 ###
 
 [logging]
-# Determines which log encoder to use for logs. Available options
-# are auto, logfmt, and json. auto will use a more user-friendly
-# output format if the output terminal is a TTY, but the format is not as
-# easily machine-readable. When the output is a non-TTY, auto will use
-# logfmt.
-# format = "auto"
+  # Determines which log encoder to use for logs. Available options
+  # are auto, logfmt, and json. auto will use a more user-friendly
+  # output format if the output terminal is a TTY, but the format is not as
+  # easily machine-readable. When the output is a non-TTY, auto will use
+  # logfmt.
+  # format = "auto"
 
-# Determines which level of logs will be emitted. The available levels
-# are error, warn, info, and debug. Logs that are equal to or above the
-# specified level will be emitted.
-# level = "info"
+  # Determines which level of logs will be emitted. The available levels
+  # are error, warn, info, and debug. Logs that are equal to or above the
+  # specified level will be emitted.
+  # level = "info"
 
-# Suppresses the logo output that is printed when the program is started.
-# The logo is always suppressed if STDOUT is not a TTY.
-# suppress-logo = false
+  # Suppresses the logo output that is printed when the program is started.
+  # The logo is always suppressed if STDOUT is not a TTY.
+  # suppress-logo = false
+
+###
+### [tls]
+###
+### Global configuration settings for TLS in InfluxDB.
+###
 
 [tls]
-# Determines the available set of cipher suites. See https://golang.org/pkg/crypto/tls/#pkg-constants
-# for a list of available ciphers, which depends on the version of Go (use the query
-# SHOW DIAGNOSTICS to see the version of Go used to build InfluxDB). If not specified, uses
-# the default settings from Go's crypto/tls package.
-# ciphers = [
-#   "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305",
-#   "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305",
-# ]
+  # Determines the available set of cipher suites. See https://golang.org/pkg/crypto/tls/#pkg-constants
+  # for a list of available ciphers, which depends on the version of Go (use the query
+  # SHOW DIAGNOSTICS to see the version of Go used to build InfluxDB). If not specified, uses
+  # the default settings from Go's crypto/tls package.
+  # ciphers = [
+  #   "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305",
+  #   "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305",
+  # ]
 
-# Minimum version of the tls protocol that will be negotiated. If not specified, uses the
-# default settings from Go's crypto/tls package.
-# min-version = "tls1.2"
+  # Minimum version of the tls protocol that will be negotiated. If not specified, uses the
+  # default settings from Go's crypto/tls package.
+  # min-version = "tls1.2"
 
-# Maximum version of the tls protocol that will be negotiated. If not specified, uses the
-# default settings from Go's crypto/tls package.
-# max-version = "tls1.3"
+  # Maximum version of the tls protocol that will be negotiated. If not specified, uses the
+  # default settings from Go's crypto/tls package.
+  # max-version = "tls1.3"

@@ -5,7 +5,7 @@
 # field and the default value used. Uncommenting a line and changing the value
 # will change the value used at runtime when the process is restarted.
 
-# Once every 24 hours InfluxDB Cluster will report usage data in log output
+# Once every 24 hours InfluxDB Cluster will report usage data in the log output.
 # The data includes a random ID, os, arch, version, the number of series and other
 # usage data. No data from user databases is ever transmitted.
 # Change this option to true to disable reporting.
@@ -50,7 +50,7 @@
   # Automatically create a default retention policy when creating a database.
   # retention-autocreate = true
 
-  # If log messages are printed for the meta service
+  # Whether log messages are printed for the meta service.
   # logging-enabled = true
 
 ###
@@ -294,7 +294,7 @@
 ### Controls the system self-monitoring, statistics and diagnostics.
 ###
 ### The internal database for monitoring data is created automatically if
-### if it does not already exist. The target retention within this database
+### it does not already exist. The target retention within this database
 ### is called 'monitor' and is also created with a retention period of 7 days
 ### and a replication factor of 1, if it does not exist. In all cases the
 ### this retention policy is configured as the default for the database.
@@ -420,7 +420,7 @@
 
   # The maximum duration for a write to wait in the queue to be processed.
   # Setting this to 0 or setting max-concurrent-write-limit to 0 disables the limit.
-  # enqueued-write-timeout = "30s"
+  # enqueued-write-timeout = 30000000000
 
 	# User supplied HTTP response headers
 	#
@@ -646,14 +646,8 @@
   # Controls whether queries are logged to the self-monitoring data store.
   # query-stats-enabled = false
 
-  # interval for how often continuous queries will be checked if they need to run
+  # Interval for how often continuous queries will be checked whether they need to run.
   # run-interval = "1s"
-
-###
-### [tls]
-###
-### Global configuration settings for TLS in InfluxDB.
-###
 
 ###
 ### [hinted-handoff]
@@ -662,44 +656,44 @@
 ###
 
 [hinted-handoff]
-# Determines whether hinted handoff is enabled.
-# enabled = true
+  # Determines whether hinted handoff is enabled.
+  # enabled = true
 
-# The directory where the hinted handoff queues are stored.
-dir = "/var/lib/influxdb/hh"
+  # The directory where the hinted handoff queues are stored.
+  dir = "/var/lib/influxdb/hh"
 
-# The default maximum size of all hinted handoff queues in bytes.
-# max-size = "10g"
+  # The default maximum size of all hinted handoff queues in bytes.
+  # max-size = "10g"
 
-# The default maximum amount of time that a hinted handoff write can stay in the queue.
-# After this time, the write will be purged.
-# max-age = "168h0m0s"
+  # The default maximum amount of time that a hinted handoff write can stay in the queue.
+  # After this time, the write will be purged.
+  # max-age = "168h0m0s"
 
-# The maximum number of concurrent queued writes to process at a time.
-# retry-concurrency = 20
+  # The maximum number of concurrent queued writes to process at a time.
+  # retry-concurrency = 20
 
-# The default rate that hinted handoffs will be retried.  The rate is in bytes per second
-# and applies across all nodes when retried.   A value of 0 disables the rate limit.
-# retry-rate-limit = 0
+  # The default rate that hinted handoffs will be retried.  The rate is in bytes per second
+  # and applies across all nodes when retried.   A value of 0 disables the rate limit.
+  # retry-rate-limit = 0
 
-# The default amount of time the system waits before attempting to flush hinted handoff
-# queues. With each failure of a hinted handoff write, this retry interval increases
-# exponentially until it reaches the maximum.
-# retry-interval = "1s"
+  # The default amount of time the system waits before attempting to flush hinted handoff
+  # queues. With each failure of a hinted handoff write, this retry interval increases
+  # exponentially until it reaches the maximum.
+  # retry-interval = "1s"
 
-# The maximum the hinted handoff retry interval will ever be.
-# retry-max-interval = "10s"
+  # The maximum the hinted handoff retry interval will ever be.
+  # retry-max-interval = "10s"
 
-# The amount of time the system waits before attempting to purge hinted handoff data due
-# to age or inactive nodes.
-# purge-interval = "1m0s"
+  # The amount of time the system waits before attempting to purge hinted handoff data due
+  # to age or inactive nodes.
+  # purge-interval = "1m0s"
 
-# Maximum number of bytes to write to a shard in a single request
-# batch-size = 512000
+  # Maximum number of bytes to write to a shard in a single request
+  # batch-size = 512000
 
-# Maximum number of writes into the hinted-handoff queue that can be pending.
-# This is writes incoming to the hh queue, not outbound from the queue.
-# max-writes-pending = 1024
+  # Maximum number of writes into the hinted-handoff queue that can be pending.
+  # This is writes incoming to the hh queue, not outbound from the queue.
+  # max-writes-pending = 1024
 
 ###
 ### [anti-entropy]
@@ -709,21 +703,27 @@ dir = "/var/lib/influxdb/hh"
 ### default.
 
 [anti-entropy]
-# Determines whether the service is enabled.
-# enabled = false
+  # Determines whether the service is enabled.
+  # enabled = false
 
-# The interval of time when anti-entropy checks run on each data node.
-# check-interval = "5m"
+  # The interval of time when anti-entropy checks run on each data node.
+  # check-interval = "5m"
 
-# The maximum number of shards that a single data node will copy or repair
-# concurrently.
-# max-fetch = 10
+  # The maximum number of shards that a single data node will copy or repair
+  # concurrently.
+  # max-fetch = 10
 
-# How many concurrent sync operations should be performed.
-# max-sync = 1
+  # How many concurrent sync operations should be performed.
+  # max-sync = 1
 
-# When set to true, missing shards will be automatically repaired.
-# auto-repair-missing = true
+  # When set to true, missing shards will be automatically repaired.
+  # auto-repair-missing = true
+
+###
+### [tls]
+###
+### Global configuration settings for TLS in InfluxDB.
+###
 
 [tls]
   # Determines the available set of cipher suites. See https://golang.org/pkg/crypto/tls/#pkg-constants
