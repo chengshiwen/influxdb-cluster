@@ -153,7 +153,11 @@ func (c *Client) Close() error {
 }
 
 // NodeID returns the client's node ID.
-func (c *Client) NodeID() uint64 { return c.nodeID }
+func (c *Client) NodeID() uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.nodeID
+}
 
 // SetMetaServers updates the meta servers on the client.
 func (c *Client) SetMetaServers(a []string) {
