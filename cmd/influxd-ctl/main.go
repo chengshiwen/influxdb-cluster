@@ -28,7 +28,7 @@ import (
 )
 
 func main() {
-	rand.Seed(time.Now().UnixNano())
+	rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	m := NewMain()
 	if err := m.Run(os.Args[1:]...); err != nil {
