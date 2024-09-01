@@ -945,6 +945,9 @@ func (s *store) shards() []*ClusterShardInfo {
 				if sgi.Deleted() {
 					continue
 				}
+				if rpi.Duration != 0 && sgi.EndTime.Add(rpi.Duration).Before(time.Now().UTC()) {
+					continue
+				}
 				for _, si := range sgi.Shards {
 					shardInfo := s.shardInfo(di, rpi, sgi, si)
 					shardInfos = append(shardInfos, shardInfo)
@@ -974,6 +977,10 @@ func (s *store) shard(id uint64) *ClusterShardInfo {
 }
 
 func (s *store) shardInfo(di DatabaseInfo, rpi RetentionPolicyInfo, sgi ShardGroupInfo, si ShardInfo) *ClusterShardInfo {
+	var expire time.Time
+	if rpi.Duration != 0 {
+		expire = sgi.EndTime.Add(rpi.Duration)
+	}
 	owners := make([]*ShardOwnerInfo, len(si.Owners))
 	for i, owner := range si.Owners {
 		n, _ := s.dataNode(owner.NodeID)
@@ -990,7 +997,7 @@ func (s *store) shardInfo(di DatabaseInfo, rpi RetentionPolicyInfo, sgi ShardGro
 		ShardGroupID:    sgi.ID,
 		StartTime:       sgi.StartTime,
 		EndTime:         sgi.EndTime,
-		ExpireTime:      sgi.EndTime.Add(rpi.Duration),
+		ExpireTime:      expire,
 		TruncatedAt:     sgi.TruncatedAt,
 		Owners:          owners,
 	}
