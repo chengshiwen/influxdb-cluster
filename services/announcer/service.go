@@ -108,12 +108,15 @@ func (s *Service) run() {
 				Version:    s.Version,
 			}
 			data, _ := json.Marshal(announcement)
-			uri := fmt.Sprintf("%s://%s/announce", s.metaHTTPScheme(), metaServers[0])
-			resp, err := s.client.PostJSON(uri, bytes.NewBuffer(data))
-			if err != nil {
-				continue
+			for i := 0; i < len(metaServers); i++ {
+				uri := fmt.Sprintf("%s://%s/announce", s.metaHTTPScheme(), metaServers[i])
+				resp, err := s.client.PostJSON(uri, bytes.NewBuffer(data))
+				if err != nil {
+					continue
+				}
+				resp.Body.Close()
+				break
 			}
-			resp.Body.Close()
 		}
 	}
 }

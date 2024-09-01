@@ -1110,13 +1110,15 @@ func (h *handler) announce() {
 			}
 			data, _ := json.Marshal(announcement)
 			h.mu.RUnlock()
-			idx := rand.Intn(len(metaServers))
-			uri := fmt.Sprintf("%s://%s/announce", h.s.HTTPScheme(), metaServers[idx])
-			resp, err := h.client.PostJSON(uri, bytes.NewBuffer(data))
-			if err != nil {
-				continue
+			for _, i := range rand.Perm(len(metaServers)) {
+				uri := fmt.Sprintf("%s://%s/announce", h.s.HTTPScheme(), metaServers[i])
+				resp, err := h.client.PostJSON(uri, bytes.NewBuffer(data))
+				if err != nil {
+					continue
+				}
+				resp.Body.Close()
+				break
 			}
-			resp.Body.Close()
 
 		case <-expiry.C:
 			h.mu.Lock()
