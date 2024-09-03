@@ -120,9 +120,6 @@ const (
 	removeHintedHandoffResponseMessage
 )
 
-// BackupTimeout is the time before a connection times out when performing a backup.
-const BackupTimeout = 30 * time.Second
-
 // ShardIDsKey is the shardIDs context key when handling read request.
 const ShardIDsKey ContextKey = iota + 1
 
@@ -1190,11 +1187,10 @@ func (s *Service) processCopyShardRequest(conn net.Conn) {
 // backupRemoteShard connects to a coordinator service on a remote host and streams a shard.
 func (s *Service) backupRemoteShard(host string, shardID uint64, since time.Time) (io.ReadCloser, error) {
 	tlsConfig := s.config.TLSClientConfig()
-	conn, err := tcp.DialTLS("tcp", host, tlsConfig)
+	conn, err := tcp.DialTLSTimeout("tcp", host, tlsConfig, time.Duration(s.config.DialTimeout))
 	if err != nil {
 		return nil, err
 	}
-	conn.SetDeadline(time.Now().Add(BackupTimeout))
 
 	if err := func() error {
 		// Write the coordinator multiplexing header byte
