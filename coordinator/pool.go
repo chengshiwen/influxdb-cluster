@@ -5,11 +5,35 @@ import (
 	"fmt"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
-
-	"gopkg.in/fatih/pool.v2"
 )
+
+var (
+	// ErrClosed is the error resulting if the pool is closed via pool.Close().
+	ErrClosed = errors.New("pool is closed")
+
+	// PoolWaitTimeout is the timeout waiting for free connection.
+	PoolWaitTimeout = 5 * time.Second
+)
+
+// Pool interface describes a pool implementation. A pool should have maximum
+// capacity. An ideal pool is thread-safe and easy to use.
+type Pool interface {
+	// Get returns a new connection from the pool. Closing the connections puts
+	// it back to the Pool. Closing it when the pool is destroyed or full will
+	// be counted as an error.
+	Get() (net.Conn, error)
+
+	// Close closes the pool and all its connections. After Close() the pool is
+	// no longer usable.
+	Close()
+
+	// Len returns the current number of idle connections of the pool.
+	Len() int
+
+	// Size returns the total number of alive connections of the pool.
+	Size() int
+}
 
 // idleConn implements idle connection.
 type idleConn struct {
@@ -20,13 +44,11 @@ type idleConn struct {
 // boundedPool implements the Pool interface based on buffered channels.
 type boundedPool struct {
 	// storage for our net.Conn connections
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	conns chan *idleConn
 
-	idleTimeout time.Duration
-	waitTimeout time.Duration
-
-	total int32
+	total chan struct{}
+	done  chan struct{}
 	// net.Conn generator
 	factory Factory
 }
@@ -35,23 +57,23 @@ type boundedPool struct {
 type Factory func() (net.Conn, error)
 
 // NewBoundedPool returns a new pool based on buffered channels with an initial
-// capacity, maximum capacity, idle timeout and timeout to wait for a connection
-// from the pool. Factory is used when initial capacity is
+// capacity, maximum capacity and maximum idle time that a connection remains
+// idle in the connection pool. Factory is used when initial capacity is
 // greater than zero to fill the pool. A zero initialCap doesn't fill the Pool
 // until a new Get() is called. During a Get(), If there is no new connection
-// available in the pool and total connections is less than the max, a new connection
+// available in the pool and total connections is less than maxCap, a new connection
 // will be created via the Factory() method. Otherwise, the call will block until
 // a connection is available or the timeout is reached.
-func NewBoundedPool(initialCap, maxCap int, idleTimeout, waitTimeout time.Duration, factory Factory) (pool.Pool, error) {
+func NewBoundedPool(initialCap, maxCap int, idleTime time.Duration, factory Factory) (Pool, error) {
 	if initialCap < 0 || maxCap <= 0 || initialCap > maxCap {
 		return nil, errors.New("invalid capacity settings")
 	}
 
 	c := &boundedPool{
-		conns:       make(chan *idleConn, maxCap),
-		factory:     factory,
-		idleTimeout: idleTimeout,
-		waitTimeout: waitTimeout,
+		conns:   make(chan *idleConn, maxCap),
+		total:   make(chan struct{}, maxCap),
+		done:    make(chan struct{}),
+		factory: factory,
 	}
 
 	// create initial connections, if something goes wrong,
@@ -63,67 +85,66 @@ func NewBoundedPool(initialCap, maxCap int, idleTimeout, waitTimeout time.Durati
 			return nil, fmt.Errorf("factory is not able to fill the pool: %s", err)
 		}
 		c.conns <- &idleConn{c: conn, t: time.Now()}
-		atomic.AddInt32(&c.total, 1)
+		c.total <- struct{}{}
 	}
 
+	go c.pruneIdleConns(idleTime)
 	return c, nil
 }
 
-func (c *boundedPool) getConns() chan *idleConn {
-	c.mu.Lock()
+func (c *boundedPool) getConnsAndFactory() (chan *idleConn, Factory) {
+	c.mu.RLock()
 	conns := c.conns
-	c.mu.Unlock()
-	return conns
+	factory := c.factory
+	c.mu.RUnlock()
+	return conns, factory
 }
 
 // Get implements the Pool interfaces Get() method. If there is no new
 // connection available in the pool, a new connection will be created via the
 // Factory() method.
 func (c *boundedPool) Get() (net.Conn, error) {
-	conns := c.getConns()
+	conns, factory := c.getConnsAndFactory()
 	if conns == nil {
-		return nil, pool.ErrClosed
+		return nil, ErrClosed
 	}
 
 	// Try and grab a connection from the pool
-	for {
+	// Wrap our connections with our custom net.Conn implementation (wrapConn
+	// method) that puts the connection back to the pool if it's closed.
+	select {
+	case conn := <-conns:
+		if conn == nil {
+			return nil, ErrClosed
+		}
+		return c.wrapConn(conn.c), nil
+	default:
+		// Could not get connection, can we create a new one?
+		c.mu.RLock()
 		select {
-		case conn := <-conns:
-			if conn == nil {
-				return nil, pool.ErrClosed
+		case c.total <- struct{}{}:
+			c.mu.RUnlock()
+			conn, err := factory()
+			if err != nil {
+				<-c.total
+				return nil, err
 			}
-			if timeout := c.idleTimeout; timeout > 0 {
-				if conn.t.Add(timeout).Before(time.Now()) {
-					// Close the connection when idle longer than the specified duration
-					conn.c.Close()
-					atomic.AddInt32(&c.total, -1)
-					continue
-				}
-			}
-			return c.wrapConn(conn.c), nil
+			return c.wrapConn(conn), nil
 		default:
-			// Could not get connection, can we create a new one?
-			if atomic.LoadInt32(&c.total) < maxConnections {
-				conn, err := c.factory()
-				if err != nil {
-					return nil, err
-				}
-				atomic.AddInt32(&c.total, 1)
-				return c.wrapConn(conn), nil
-			}
+			c.mu.RUnlock()
 		}
+	}
 
-		// The pool was empty and we couldn't create a new one to
-		// retry until one is free or we timeout
-		select {
-		case conn := <-conns:
-			if conn == nil {
-				return nil, pool.ErrClosed
-			}
-			return c.wrapConn(conn.c), nil
-		case <-time.After(c.waitTimeout):
-			return nil, fmt.Errorf("timed out waiting for free connection")
+	// The pool was empty and we couldn't create a new one to
+	// retry until one is free or we timeout
+	select {
+	case conn := <-conns:
+		if conn == nil {
+			return nil, ErrClosed
 		}
+		return c.wrapConn(conn.c), nil
+	case <-time.After(PoolWaitTimeout):
+		return nil, errors.New("timed out waiting for free connection")
 	}
 }
 
@@ -134,8 +155,8 @@ func (c *boundedPool) put(conn net.Conn) error {
 		return errors.New("connection is nil. rejecting")
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 
 	if c.conns == nil {
 		// pool is closed, close passed connection
@@ -149,15 +170,17 @@ func (c *boundedPool) put(conn net.Conn) error {
 		return nil
 	default:
 		// pool is full, close passed connection
-		atomic.AddInt32(&c.total, -1)
+		<-c.total
 		return conn.Close()
 	}
 }
 
 func (c *boundedPool) Close() {
 	c.mu.Lock()
-	conns := c.conns
+	conns, total, done := c.conns, c.total, c.done
 	c.conns = nil
+	c.total = nil
+	c.done = nil
 	c.factory = nil
 	c.mu.Unlock()
 
@@ -169,11 +192,71 @@ func (c *boundedPool) Close() {
 	for conn := range conns {
 		conn.c.Close()
 	}
+	close(total)
+	close(done)
 }
 
-func (c *boundedPool) Len() int { return len(c.getConns()) }
+func (c *boundedPool) Len() int {
+	conns, _ := c.getConnsAndFactory()
+	return len(conns)
+}
 
-// newConn wraps a standard net.Conn to a poolConn net.Conn.
+func (c *boundedPool) Size() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.total)
+}
+
+// pruneIdleConns prunes idle connections.
+func (c *boundedPool) pruneIdleConns(idleTime time.Duration) {
+	if idleTime <= 0 {
+		return
+	}
+	ticker := time.NewTicker(idleTime)
+	defer ticker.Stop()
+	for {
+		c.mu.RLock()
+		done := c.done
+		c.mu.RUnlock()
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			conns, _ := c.getConnsAndFactory()
+			if conns == nil {
+				return
+			}
+			if len(conns) == 0 {
+				continue
+			}
+			var newConns []*idleConn
+			for {
+				select {
+				case conn := <-conns:
+					if conn.t.Add(idleTime).Before(time.Now()) {
+						<-c.total
+						conn.c.Close()
+					} else {
+						newConns = append(newConns, conn)
+					}
+				default:
+					goto DONE
+				}
+			}
+		DONE:
+			if len(newConns) > 0 {
+				c.mu.RLock()
+				for _, conn := range newConns {
+					c.conns <- conn
+				}
+				c.mu.RUnlock()
+				newConns = nil
+			}
+		}
+	}
+}
+
+// wrapConn wraps a standard net.Conn to a poolConn net.Conn.
 func (c *boundedPool) wrapConn(conn net.Conn) net.Conn {
 	p := &pooledConn{c: c}
 	p.Conn = conn
@@ -196,6 +279,7 @@ func (p *pooledConn) Close() error {
 
 	if p.unusable {
 		if p.Conn != nil {
+			<-p.c.total
 			return p.Conn.Close()
 		}
 		return nil
@@ -208,5 +292,10 @@ func (p *pooledConn) MarkUnusable() {
 	p.mu.Lock()
 	p.unusable = true
 	p.mu.Unlock()
-	atomic.AddInt32(&p.c.total, -1)
+}
+
+func MarkUnusable(conn net.Conn) {
+	if pc, ok := conn.(*pooledConn); ok {
+		pc.MarkUnusable()
+	}
 }

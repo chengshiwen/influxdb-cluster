@@ -123,7 +123,7 @@ func (w *ShardWriter) dial(nodeID uint64) (net.Conn, error) {
 		factory := &connFactory{nodeID: nodeID, clientPool: w.pool, timeout: w.dialTimeout, tlsConfig: w.TLSConfig}
 		factory.metaClient = w.MetaClient
 
-		p, err := NewBoundedPool(1, w.maxIdleStreams, w.idleTimeout, DefaultPoolWaitTimeout, factory.dial)
+		p, err := NewBoundedPool(1, w.maxIdleStreams, w.idleTimeout, factory.dial)
 		if err != nil {
 			return nil, err
 		}

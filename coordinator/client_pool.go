@@ -3,28 +3,26 @@ package coordinator
 import (
 	"net"
 	"sync"
-
-	"gopkg.in/fatih/pool.v2"
 )
 
 type clientPool struct {
 	mu   sync.RWMutex
-	pool map[uint64]pool.Pool
+	pool map[uint64]Pool
 }
 
 func newClientPool() *clientPool {
 	return &clientPool{
-		pool: make(map[uint64]pool.Pool),
+		pool: make(map[uint64]Pool),
 	}
 }
 
-func (c *clientPool) setPool(nodeID uint64, p pool.Pool) {
+func (c *clientPool) setPool(nodeID uint64, p Pool) {
 	c.mu.Lock()
 	c.pool[nodeID] = p
 	c.mu.Unlock()
 }
 
-func (c *clientPool) getPool(nodeID uint64) (pool.Pool, bool) {
+func (c *clientPool) getPool(nodeID uint64) (Pool, bool) {
 	c.mu.RLock()
 	p, ok := c.pool[nodeID]
 	c.mu.RUnlock()
@@ -35,7 +33,7 @@ func (c *clientPool) size() int {
 	c.mu.RLock()
 	var size int
 	for _, p := range c.pool {
-		size += p.Len()
+		size += p.Size()
 	}
 	c.mu.RUnlock()
 	return size

@@ -26,9 +26,6 @@ const (
 	// remains idle in the connection pool.
 	DefaultPoolMaxIdleTime = time.Minute
 
-	// DefaultPoolWaitTimeout is the default timeout waiting for free connection.
-	DefaultPoolWaitTimeout = 5 * time.Second
-
 	// DefaultWriteTimeout is the default timeout for a complete write to succeed.
 	DefaultWriteTimeout = 10 * time.Second
 

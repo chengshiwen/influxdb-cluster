@@ -44,7 +44,6 @@ require (
 	golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba
 	golang.org/x/tools v0.16.0
 	google.golang.org/grpc v1.56.3
-	gopkg.in/fatih/pool.v2 v2.0.0
 )
 
 require (

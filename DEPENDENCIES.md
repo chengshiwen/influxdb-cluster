@@ -45,7 +45,6 @@
 - golang.org/x/sys [BSD LICENSE](https://github.com/golang/sys/blob/master/LICENSE)
 - golang.org/x/text [BSD LICENSE](https://github.com/golang/text/blob/master/LICENSE)
 - golang.org/x/time [BSD LICENSE](https://github.com/golang/time/blob/master/LICENSE)
-- gopkg.in/fatih/pool.v2 [MIT LICENSE](https://github.com/fatih/pool/blob/v2.0.0/LICENSE)
 - jquery 2.1.4 [MIT LICENSE](https://github.com/jquery/jquery/blob/master/LICENSE.txt)
 - github.com/xlab/treeprint [MIT LICENSE](https://github.com/xlab/treeprint/blob/master/LICENSE)
 
