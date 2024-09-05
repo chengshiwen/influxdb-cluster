@@ -13,11 +13,11 @@ import (
 
 // ShardWriter writes a set of points to a shard.
 type ShardWriter struct {
-	pool           *clientPool
-	timeout        time.Duration
-	dialTimeout    time.Duration
-	idleTimeout    time.Duration
-	maxIdleStreams int
+	pool        *clientPool
+	timeout     time.Duration
+	dialTimeout time.Duration
+	idleTime    time.Duration
+	maxStreams  int
 
 	MetaClient interface {
 		DataNode(id uint64) (ni *meta.NodeInfo, err error)
@@ -28,13 +28,13 @@ type ShardWriter struct {
 }
 
 // NewShardWriter returns a new instance of ShardWriter.
-func NewShardWriter(timeout, dialTimeout, idleTimeout time.Duration, maxIdleStreams int) *ShardWriter {
+func NewShardWriter(timeout, dialTimeout, idleTime time.Duration, maxStreams int) *ShardWriter {
 	return &ShardWriter{
-		pool:           newClientPool(),
-		timeout:        timeout,
-		dialTimeout:    dialTimeout,
-		idleTimeout:    idleTimeout,
-		maxIdleStreams: maxIdleStreams,
+		pool:        newClientPool(),
+		timeout:     timeout,
+		dialTimeout: dialTimeout,
+		idleTime:    idleTime,
+		maxStreams:  maxStreams,
 	}
 }
 
@@ -53,18 +53,11 @@ func (w *ShardWriter) WriteShard(shardID, ownerID uint64, points []models.Point)
 
 // WriteShardBinary writes time series binary points to a shard
 func (w *ShardWriter) WriteShardBinary(shardID, ownerID uint64, points [][]byte) error {
-	c, err := w.dial(ownerID)
+	conn, err := w.dial(ownerID)
 	if err != nil {
 		return err
 	}
-
-	conn, ok := c.(*pooledConn)
-	if !ok {
-		panic("wrong connection type")
-	}
-	defer func(conn net.Conn) {
-		conn.Close() // return to pool
-	}(conn)
+	defer conn.Close()
 
 	// Determine the location of this shard and whether it still exists
 	db, rp, sgi := w.MetaClient.ShardOwner(shardID)
@@ -89,17 +82,15 @@ func (w *ShardWriter) WriteShardBinary(shardID, ownerID uint64, points [][]byte)
 	}
 
 	// Write request.
-	conn.SetWriteDeadline(time.Now().Add(w.timeout))
-	if err := WriteTLV(conn, writeShardRequestMessage, buf); err != nil {
-		conn.MarkUnusable()
+	if err := WriteTLVT(conn, writeShardRequestMessage, buf, w.timeout); err != nil {
+		MarkUnusable(conn)
 		return err
 	}
 
 	// Read the response.
-	conn.SetReadDeadline(time.Now().Add(w.timeout))
-	_, buf, err = ReadTLV(conn)
+	_, buf, err = ReadTLVT(conn, w.timeout)
 	if err != nil {
-		conn.MarkUnusable()
+		MarkUnusable(conn)
 		return err
 	}
 
@@ -116,6 +107,7 @@ func (w *ShardWriter) WriteShardBinary(shardID, ownerID uint64, points [][]byte)
 	return nil
 }
 
+// dial returns a connection to a single node in the cluster.
 func (w *ShardWriter) dial(nodeID uint64) (net.Conn, error) {
 	// If we don't have a connection pool for that addr yet, create one
 	_, ok := w.pool.getPool(nodeID)
@@ -123,7 +115,7 @@ func (w *ShardWriter) dial(nodeID uint64) (net.Conn, error) {
 		factory := &connFactory{nodeID: nodeID, clientPool: w.pool, timeout: w.dialTimeout, tlsConfig: w.TLSConfig}
 		factory.metaClient = w.MetaClient
 
-		p, err := NewBoundedPool(1, w.maxIdleStreams, w.idleTimeout, factory.dial)
+		p, err := NewBoundedPool(1, w.maxStreams, w.idleTime, factory.dial)
 		if err != nil {
 			return nil, err
 		}
@@ -135,7 +127,7 @@ func (w *ShardWriter) dial(nodeID uint64) (net.Conn, error) {
 // Close closes ShardWriter's pool
 func (w *ShardWriter) Close() error {
 	if w.pool == nil {
-		return fmt.Errorf("client already closed")
+		return ErrClientClosed
 	}
 	w.pool.close()
 	w.pool = nil
@@ -143,7 +135,7 @@ func (w *ShardWriter) Close() error {
 }
 
 const (
-	maxConnections = 1000
+	maxConnections = 5000
 	maxRetries     = 3
 )
 

@@ -21,7 +21,7 @@ func Test_ExecuteStatement(t *testing.T) {
 	mock.expect("DROP DATABASE foo")
 	mock.expect("DROP DATABASE foo")
 
-	e := NewMetaExecutor(time.Duration(0), time.Second)
+	e := NewMetaExecutor(time.Duration(0), time.Second, time.Minute, 1)
 	e.MetaClient = newMockMetaClient(numOfNodes)
 	// Replace MetaExecutor's nodeExecutor with our mock.
 	e.nodeExecutor = mock

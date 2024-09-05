@@ -152,7 +152,7 @@ func TestShardWriter_Write_ErrReadTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := coordinator.NewShardWriter(10*time.Second, time.Second, time.Millisecond, 1)
+	w := coordinator.NewShardWriter(10*time.Second, time.Second, time.Minute, 1)
 	w.MetaClient = &metaClient{addr: ln.Addr().String()}
 	now := time.Now()
 
@@ -183,7 +183,7 @@ func TestShardWriter_Write_PoolMax(t *testing.T) {
 	defer s.Close()
 	defer ts.Close()
 
-	w := coordinator.NewShardWriter(10*time.Second, time.Second, 100*time.Millisecond, 0)
+	w := coordinator.NewShardWriter(10*time.Second, time.Second, 100*time.Minute, 0)
 	w.MetaClient = &metaClient{addr: ts.ln.Addr().String()}
 	now := time.Now()
 

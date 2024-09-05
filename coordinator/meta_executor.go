@@ -15,7 +15,6 @@ import (
 	"github.com/influxdata/influxdb/services/meta"
 	"github.com/influxdata/influxdb/storage/reads"
 	"github.com/influxdata/influxdb/storage/reads/datatypes"
-	"github.com/influxdata/influxdb/tcp"
 	"github.com/influxdata/influxdb/tsdb"
 	"github.com/influxdata/influxql"
 	"golang.org/x/sync/errgroup"
@@ -23,8 +22,11 @@ import (
 
 // MetaExecutor executes meta queries on one or more data nodes.
 type MetaExecutor struct {
+	pool        *clientPool
 	timeout     time.Duration
 	dialTimeout time.Duration
+	idleTime    time.Duration
+	maxStreams  int
 
 	nodeExecutor interface {
 		executeOnNode(nodeID uint64, stmt influxql.Statement, database string) error
@@ -41,10 +43,13 @@ type MetaExecutor struct {
 }
 
 // NewMetaExecutor returns a new initialized *MetaExecutor.
-func NewMetaExecutor(timeout, dialTimeout time.Duration) *MetaExecutor {
+func NewMetaExecutor(timeout, dialTimeout, idleTime time.Duration, maxStreams int) *MetaExecutor {
 	e := &MetaExecutor{
+		pool:        newClientPool(),
 		timeout:     timeout,
 		dialTimeout: dialTimeout,
+		idleTime:    idleTime,
+		maxStreams:  maxStreams,
 	}
 	e.nodeExecutor = e
 	return e
@@ -113,13 +118,15 @@ func (e *MetaExecutor) executeOnNode(nodeID uint64, stmt influxql.Statement, dat
 	request.SetDatabase(database)
 
 	// Write request.
-	if err := EncodeTLV(conn, executeStatementRequestMessage, &request); err != nil {
+	if err := EncodeTLVT(conn, executeStatementRequestMessage, &request, e.timeout); err != nil {
+		MarkUnusable(conn)
 		return err
 	}
 
 	// Read the response.
 	var resp ExecuteStatementResponse
-	if _, err := DecodeTLV(conn, &resp); err != nil {
+	if _, err := DecodeTLVT(conn, &resp, e.timeout); err != nil {
+		MarkUnusable(conn)
 		return err
 	}
 
@@ -177,15 +184,17 @@ func (e *MetaExecutor) TaskManagerStatement(nodeID uint64, stmt influxql.Stateme
 	defer conn.Close()
 
 	// Write request.
-	if err := EncodeTLV(conn, taskManagerStatementRequestMessage, &TaskManagerStatementRequest{
+	if err := EncodeTLVT(conn, taskManagerStatementRequestMessage, &TaskManagerStatementRequest{
 		Statement: stmt.String(),
-	}); err != nil {
+	}, e.timeout); err != nil {
+		MarkUnusable(conn)
 		return query.Result{}, err
 	}
 
 	// Read the response.
 	var resp TaskManagerStatementResponse
-	if _, err := DecodeTLV(conn, &resp); err != nil {
+	if _, err := DecodeTLVT(conn, &resp, e.timeout); err != nil {
+		MarkUnusable(conn)
 		return query.Result{}, err
 	}
 	return resp.Result, resp.Err
@@ -199,17 +208,19 @@ func (e *MetaExecutor) MeasurementNames(nodeID uint64, database string, retentio
 	defer conn.Close()
 
 	// Write request.
-	if err := EncodeTLV(conn, measurementNamesRequestMessage, &MeasurementNamesRequest{
+	if err := EncodeTLVT(conn, measurementNamesRequestMessage, &MeasurementNamesRequest{
 		Database:        database,
 		RetentionPolicy: retentionPolicy,
 		Condition:       cond,
-	}); err != nil {
+	}, e.timeout); err != nil {
+		MarkUnusable(conn)
 		return nil, err
 	}
 
 	// Read the response.
 	var resp MeasurementNamesResponse
-	if _, err := DecodeTLV(conn, &resp); err != nil {
+	if _, err := DecodeTLVT(conn, &resp, e.timeout); err != nil {
+		MarkUnusable(conn)
 		return nil, err
 	}
 	return resp.Names, nil
@@ -223,16 +234,18 @@ func (e *MetaExecutor) TagKeys(nodeID uint64, shardIDs []uint64, cond influxql.E
 	defer conn.Close()
 
 	// Write request.
-	if err := EncodeTLV(conn, tagKeysRequestMessage, &TagKeysRequest{
+	if err := EncodeTLVT(conn, tagKeysRequestMessage, &TagKeysRequest{
 		ShardIDs:  shardIDs,
 		Condition: cond,
-	}); err != nil {
+	}, e.timeout); err != nil {
+		MarkUnusable(conn)
 		return nil, err
 	}
 
 	// Read the response.
 	var resp TagKeysResponse
-	if _, err := DecodeTLV(conn, &resp); err != nil {
+	if _, err := DecodeTLVT(conn, &resp, e.timeout); err != nil {
+		MarkUnusable(conn)
 		return nil, err
 	}
 	return resp.TagKeys, nil
@@ -246,16 +259,18 @@ func (e *MetaExecutor) TagValues(nodeID uint64, shardIDs []uint64, cond influxql
 	defer conn.Close()
 
 	// Write request.
-	if err := EncodeTLV(conn, tagValuesRequestMessage, &TagValuesRequest{
+	if err := EncodeTLVT(conn, tagValuesRequestMessage, &TagValuesRequest{
 		ShardIDs:  shardIDs,
 		Condition: cond,
-	}); err != nil {
+	}, e.timeout); err != nil {
+		MarkUnusable(conn)
 		return nil, err
 	}
 
 	// Read the response.
 	var resp TagValuesResponse
-	if _, err := DecodeTLV(conn, &resp); err != nil {
+	if _, err := DecodeTLVT(conn, &resp, e.timeout); err != nil {
+		MarkUnusable(conn)
 		return nil, err
 	}
 	return resp.TagValues, nil
@@ -269,15 +284,17 @@ func (e *MetaExecutor) SeriesSketches(nodeID uint64, database string) (estimator
 	defer conn.Close()
 
 	// Write request.
-	if err := EncodeTLV(conn, seriesSketchesRequestMessage, &SeriesSketchesRequest{
+	if err := EncodeTLVT(conn, seriesSketchesRequestMessage, &SeriesSketchesRequest{
 		Database: database,
-	}); err != nil {
+	}, e.timeout); err != nil {
+		MarkUnusable(conn)
 		return nil, nil, err
 	}
 
 	// Read the response.
 	var resp SeriesSketchesResponse
-	if _, err := DecodeTLV(conn, &resp); err != nil {
+	if _, err := DecodeTLVT(conn, &resp, e.timeout); err != nil {
+		MarkUnusable(conn)
 		return nil, nil, err
 	}
 	return resp.Sketch, resp.TSSketch, nil
@@ -291,15 +308,17 @@ func (e *MetaExecutor) MeasurementsSketches(nodeID uint64, database string) (est
 	defer conn.Close()
 
 	// Write request.
-	if err := EncodeTLV(conn, measurementsSketchesRequestMessage, &MeasurementsSketchesRequest{
+	if err := EncodeTLVT(conn, measurementsSketchesRequestMessage, &MeasurementsSketchesRequest{
 		Database: database,
-	}); err != nil {
+	}, e.timeout); err != nil {
+		MarkUnusable(conn)
 		return nil, nil, err
 	}
 
 	// Read the response.
 	var resp MeasurementsSketchesResponse
-	if _, err := DecodeTLV(conn, &resp); err != nil {
+	if _, err := DecodeTLVT(conn, &resp, e.timeout); err != nil {
+		MarkUnusable(conn)
 		return nil, nil, err
 	}
 	return resp.Sketch, resp.TSSketch, nil
@@ -313,16 +332,18 @@ func (e *MetaExecutor) FieldDimensions(nodeID uint64, shardIDs []uint64, m *infl
 	defer conn.Close()
 
 	// Write request.
-	if err := EncodeTLV(conn, fieldDimensionsRequestMessage, &FieldDimensionsRequest{
+	if err := EncodeTLVT(conn, fieldDimensionsRequestMessage, &FieldDimensionsRequest{
 		ShardIDs:    shardIDs,
 		Measurement: *m,
-	}); err != nil {
+	}, e.timeout); err != nil {
+		MarkUnusable(conn)
 		return nil, nil, err
 	}
 
 	// Read the response.
 	var resp FieldDimensionsResponse
-	if _, err := DecodeTLV(conn, &resp); err != nil {
+	if _, err := DecodeTLVT(conn, &resp, e.timeout); err != nil {
+		MarkUnusable(conn)
 		return nil, nil, err
 	}
 	return resp.Fields, resp.Dimensions, resp.Err
@@ -336,17 +357,19 @@ func (e *MetaExecutor) MapType(nodeID uint64, shardIDs []uint64, m *influxql.Mea
 	defer conn.Close()
 
 	// Write request.
-	if err := EncodeTLV(conn, mapTypeRequestMessage, &MapTypeRequest{
+	if err := EncodeTLVT(conn, mapTypeRequestMessage, &MapTypeRequest{
 		ShardIDs:    shardIDs,
 		Measurement: *m,
 		Field:       field,
-	}); err != nil {
+	}, e.timeout); err != nil {
+		MarkUnusable(conn)
 		return influxql.Unknown, err
 	}
 
 	// Read the response.
 	var resp MapTypeResponse
-	if _, err := DecodeTLV(conn, &resp); err != nil {
+	if _, err := DecodeTLVT(conn, &resp, e.timeout); err != nil {
+		MarkUnusable(conn)
 		return influxql.Unknown, err
 	}
 	return resp.Type, nil
@@ -357,6 +380,7 @@ func (e *MetaExecutor) CreateIterator(nodeID uint64, shardIDs []uint64, ctx cont
 	if err != nil {
 		return nil, err
 	}
+	MarkUnusable(conn)
 
 	var sc tracing.SpanContext
 	if span := tracing.SpanFromContext(ctx); span != nil {
@@ -371,17 +395,17 @@ func (e *MetaExecutor) CreateIterator(nodeID uint64, shardIDs []uint64, ctx cont
 	var resp CreateIteratorResponse
 	if err := func() error {
 		// Write request.
-		if err := EncodeTLV(conn, createIteratorRequestMessage, &CreateIteratorRequest{
+		if err := EncodeTLVT(conn, createIteratorRequestMessage, &CreateIteratorRequest{
 			ShardIDs:    shardIDs,
 			Measurement: *m,
 			Opt:         opt,
 			SpanContext: sc,
-		}); err != nil {
+		}, e.timeout); err != nil {
 			return err
 		}
 
 		// Read the response.
-		if _, err := DecodeTLV(conn, &resp); err != nil {
+		if _, err := DecodeTLVT(conn, &resp, e.timeout); err != nil {
 			return err
 		} else if resp.Err != nil {
 			return err
@@ -404,17 +428,19 @@ func (e *MetaExecutor) IteratorCost(nodeID uint64, shardIDs []uint64, m *influxq
 	defer conn.Close()
 
 	// Write request.
-	if err := EncodeTLV(conn, iteratorCostRequestMessage, &IteratorCostRequest{
+	if err := EncodeTLVT(conn, iteratorCostRequestMessage, &IteratorCostRequest{
 		ShardIDs:    shardIDs,
 		Measurement: *m,
 		Opt:         opt,
-	}); err != nil {
+	}, e.timeout); err != nil {
+		MarkUnusable(conn)
 		return query.IteratorCost{}, err
 	}
 
 	// Read the response.
 	var resp IteratorCostResponse
-	if _, err := DecodeTLV(conn, &resp); err != nil {
+	if _, err := DecodeTLVT(conn, &resp, e.timeout); err != nil {
+		MarkUnusable(conn)
 		return query.IteratorCost{}, err
 	}
 	return resp.Cost, resp.Err
@@ -425,19 +451,20 @@ func (e *MetaExecutor) ReadFilter(nodeID uint64, shardIDs []uint64, ctx context.
 	if err != nil {
 		return nil, err
 	}
+	MarkUnusable(conn)
 
 	if err := func() error {
 		// Write request.
-		if err := EncodeTLV(conn, storeReadFilterRequestMessage, &StoreReadFilterRequest{
+		if err := EncodeTLVT(conn, storeReadFilterRequestMessage, &StoreReadFilterRequest{
 			ShardIDs: shardIDs,
 			Request:  *req,
-		}); err != nil {
+		}, e.timeout); err != nil {
 			return err
 		}
 
 		// Read the response.
 		var resp StoreReadFilterResponse
-		if _, err := DecodeTLV(conn, &resp); err != nil {
+		if _, err := DecodeTLVT(conn, &resp, e.timeout); err != nil {
 			return err
 		} else if resp.Err != nil {
 			return err
@@ -457,19 +484,20 @@ func (e *MetaExecutor) ReadGroup(nodeID uint64, shardIDs []uint64, ctx context.C
 	if err != nil {
 		return nil, err
 	}
+	MarkUnusable(conn)
 
 	if err := func() error {
 		// Write request.
-		if err := EncodeTLV(conn, storeReadGroupRequestMessage, &StoreReadGroupRequest{
+		if err := EncodeTLVT(conn, storeReadGroupRequestMessage, &StoreReadGroupRequest{
 			ShardIDs: shardIDs,
 			Request:  *req,
-		}); err != nil {
+		}, e.timeout); err != nil {
 			return err
 		}
 
 		// Read the response.
 		var resp StoreReadGroupResponse
-		if _, err := DecodeTLV(conn, &resp); err != nil {
+		if _, err := DecodeTLVT(conn, &resp, e.timeout); err != nil {
 			return err
 		} else if resp.Err != nil {
 			return err
@@ -486,23 +514,27 @@ func (e *MetaExecutor) ReadGroup(nodeID uint64, shardIDs []uint64, ctx context.C
 
 // dial returns a connection to a single node in the cluster.
 func (e *MetaExecutor) dial(nodeID uint64) (net.Conn, error) {
-	ni, err := e.MetaClient.DataNode(nodeID)
-	if err != nil {
-		return nil, err
-	}
+	// If we don't have a connection pool for that addr yet, create one
+	_, ok := e.pool.getPool(nodeID)
+	if !ok {
+		factory := &connFactory{nodeID: nodeID, clientPool: e.pool, timeout: e.dialTimeout, tlsConfig: e.TLSConfig}
+		factory.metaClient = e.MetaClient
 
-	conn, err := tcp.DialTLSTimeout("tcp", ni.TCPAddr, e.TLSConfig, e.dialTimeout)
-	if err != nil {
-		return nil, err
+		p, err := NewBoundedPool(1, e.maxStreams, e.idleTime, factory.dial)
+		if err != nil {
+			return nil, err
+		}
+		e.pool.setPool(nodeID, p)
 	}
-	if e.timeout > 0 {
-		conn.SetDeadline(time.Now().Add(e.timeout))
-	}
+	return e.pool.conn(nodeID)
+}
 
-	// Write the cluster multiplexing header byte
-	if _, err := conn.Write([]byte{MuxHeader}); err != nil {
-		conn.Close()
-		return nil, err
+// Close closes MetaExecutor's pool
+func (e *MetaExecutor) Close() error {
+	if e.pool == nil {
+		return ErrClientClosed
 	}
-	return conn, nil
+	e.pool.close()
+	e.pool = nil
+	return nil
 }

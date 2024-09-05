@@ -26,6 +26,9 @@ const (
 	// remains idle in the connection pool.
 	DefaultPoolMaxIdleTime = time.Minute
 
+	// DefaultShardReaderTimeout is the default timeout set on shard readers.
+	DefaultShardReaderTimeout = time.Duration(0)
+
 	// DefaultWriteTimeout is the default timeout for a complete write to succeed.
 	DefaultWriteTimeout = 10 * time.Second
 
@@ -78,6 +81,7 @@ func NewConfig() Config {
 		DialTimeout:          toml.Duration(DefaultDialTimeout),
 		PoolMaxIdleStreams:   DefaultPoolMaxIdleStreams,
 		PoolMaxIdleTime:      toml.Duration(DefaultPoolMaxIdleTime),
+		ShardReaderTimeout:   toml.Duration(DefaultShardReaderTimeout),
 		WriteTimeout:         toml.Duration(DefaultWriteTimeout),
 		QueryTimeout:         toml.Duration(query.DefaultQueryTimeout),
 		MaxConcurrentQueries: DefaultMaxConcurrentQueries,

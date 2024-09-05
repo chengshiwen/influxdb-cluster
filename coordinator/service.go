@@ -357,22 +357,16 @@ func (s *Service) handleConn(conn net.Conn) {
 			s.executeStatementResponse(conn, err)
 		case taskManagerStatementRequestMessage:
 			s.processTaskManagerStatementRequest(conn)
-			return
 		case measurementNamesRequestMessage:
 			s.processMeasurementNamesRequest(conn)
-			return
 		case tagKeysRequestMessage:
 			s.processTagKeysRequest(conn)
-			return
 		case tagValuesRequestMessage:
 			s.processTagValuesRequest(conn)
-			return
 		case seriesSketchesRequestMessage:
 			s.processSeriesSketchesRequest(conn)
-			return
 		case measurementsSketchesRequestMessage:
 			s.processMeasurementsSketchesRequest(conn)
-			return
 		case storeReadFilterRequestMessage:
 			s.processStoreReadFilterRequest(conn)
 			return
@@ -386,15 +380,12 @@ func (s *Service) handleConn(conn net.Conn) {
 		case iteratorCostRequestMessage:
 			atomic.AddInt64(&s.stats.IteratorCostReq, 1)
 			s.processIteratorCostRequest(conn)
-			return
 		case fieldDimensionsRequestMessage:
 			atomic.AddInt64(&s.stats.FieldDimensionsReq, 1)
 			s.processFieldDimensionsRequest(conn)
-			return
 		case mapTypeRequestMessage:
 			atomic.AddInt64(&s.stats.MapTypeReq, 1)
 			s.processMapTypeRequest(conn)
-			return
 		case expandSourcesRequestMessage:
 			atomic.AddInt64(&s.stats.ExpandSourcesReq, 1)
 			s.processExpandSourcesRequest(conn)
@@ -1497,6 +1488,16 @@ func (s *Service) serveHTTP() {
 	srv.Serve(s.httpListener)
 }
 
+// ReadTLVT reads a type-length-value record with timeout from r.
+func ReadTLVT(r net.Conn, t time.Duration) (byte, []byte, error) {
+	if t > 0 {
+		if err := r.SetReadDeadline(time.Now().Add(t)); err != nil {
+			return 0, nil, err
+		}
+	}
+	return ReadTLV(r)
+}
+
 // ReadTLV reads a type-length-value record from r.
 func ReadTLV(r io.Reader) (byte, []byte, error) {
 	typ, err := ReadType(r)
@@ -1541,6 +1542,16 @@ func ReadLV(r io.Reader) ([]byte, error) {
 	return buf, nil
 }
 
+// WriteTLVT writes a type-length-value record with timeout to w.
+func WriteTLVT(w net.Conn, typ byte, buf []byte, t time.Duration) error {
+	if t > 0 {
+		if err := w.SetWriteDeadline(time.Now().Add(t)); err != nil {
+			return err
+		}
+	}
+	return WriteTLV(w, typ, buf)
+}
+
 // WriteTLV writes a type-length-value record to w.
 func WriteTLV(w io.Writer, typ byte, buf []byte) error {
 	if err := WriteType(w, typ); err != nil {
@@ -1574,6 +1585,16 @@ func WriteLV(w io.Writer, buf []byte) error {
 	return nil
 }
 
+// EncodeTLVT encodes v to a binary format and writes the record-length-value record with timeout to w.
+func EncodeTLVT(w net.Conn, typ byte, v encoding.BinaryMarshaler, t time.Duration) error {
+	if t > 0 {
+		if err := w.SetWriteDeadline(time.Now().Add(t)); err != nil {
+			return err
+		}
+	}
+	return EncodeTLV(w, typ, v)
+}
+
 // EncodeTLV encodes v to a binary format and writes the record-length-value record to w.
 func EncodeTLV(w io.Writer, typ byte, v encoding.BinaryMarshaler) error {
 	if err := WriteType(w, typ); err != nil {
@@ -1598,7 +1619,17 @@ func EncodeLV(w io.Writer, v encoding.BinaryMarshaler) error {
 	return nil
 }
 
-// DecodeTLV reads the type-length-value record from r and unmarshals it into v.
+// DecodeTLVT decodes the type-length-value record with timeout from r and unmarshals it into v.
+func DecodeTLVT(r net.Conn, v encoding.BinaryUnmarshaler, t time.Duration) (typ byte, err error) {
+	if t > 0 {
+		if err := r.SetReadDeadline(time.Now().Add(t)); err != nil {
+			return 0, err
+		}
+	}
+	return DecodeTLV(r, v)
+}
+
+// DecodeTLV decodes the type-length-value record from r and unmarshals it into v.
 func DecodeTLV(r io.Reader, v encoding.BinaryUnmarshaler) (typ byte, err error) {
 	typ, err = ReadType(r)
 	if err != nil {
@@ -1610,7 +1641,7 @@ func DecodeTLV(r io.Reader, v encoding.BinaryUnmarshaler) (typ byte, err error) 
 	return typ, nil
 }
 
-// DecodeLV reads the length-value record from r and unmarshals it into v.
+// DecodeLV decodes the length-value record from r and unmarshals it into v.
 func DecodeLV(r io.Reader, v encoding.BinaryUnmarshaler) error {
 	buf, err := ReadLV(r)
 	if err != nil {

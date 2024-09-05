@@ -1,9 +1,12 @@
 package coordinator
 
 import (
+	"errors"
 	"net"
 	"sync"
 )
+
+var ErrClientClosed = errors.New("client already closed")
 
 type clientPool struct {
 	mu   sync.RWMutex

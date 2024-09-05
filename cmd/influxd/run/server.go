@@ -204,7 +204,8 @@ func NewServer(c *Config, buildInfo *BuildInfo) (*Server, error) {
 	s.PointsWriter.Subscriber = s.Subscriber
 
 	// Initialize meta executor.
-	s.MetaExecutor = coordinator.NewMetaExecutor(time.Duration(c.Coordinator.QueryTimeout), time.Duration(c.Coordinator.DialTimeout))
+	s.MetaExecutor = coordinator.NewMetaExecutor(time.Duration(c.Coordinator.ShardReaderTimeout), time.Duration(c.Coordinator.DialTimeout),
+		time.Duration(c.Coordinator.PoolMaxIdleTime), c.Coordinator.PoolMaxIdleStreams)
 	s.MetaExecutor.MetaClient = s.MetaClient
 	s.MetaExecutor.TLSConfig = tlsClientConfig
 
