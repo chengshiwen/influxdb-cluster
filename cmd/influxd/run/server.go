@@ -547,12 +547,20 @@ func (s *Server) Close() error {
 
 	s.config.deregisterDiagnostics(s.Monitor)
 
+	if s.ShardWriter != nil {
+		s.ShardWriter.Close()
+	}
+
 	if s.PointsWriter != nil {
 		s.PointsWriter.Close()
 	}
 
 	if s.HintedHandoff != nil {
 		s.HintedHandoff.Close()
+	}
+
+	if s.MetaExecutor != nil {
+		s.MetaExecutor.Close()
 	}
 
 	if s.QueryExecutor != nil {
@@ -600,7 +608,9 @@ func (s *Server) Reset() error {
 	s.closing = svr.closing
 	s.MetaClient = svr.MetaClient
 	s.TSDBStore = svr.TSDBStore
+	s.ClusterStore = svr.ClusterStore
 	s.QueryExecutor = svr.QueryExecutor
+	s.MetaExecutor = svr.MetaExecutor
 	s.PointsWriter = svr.PointsWriter
 	s.ShardWriter = svr.ShardWriter
 	s.HintedHandoff = svr.HintedHandoff
