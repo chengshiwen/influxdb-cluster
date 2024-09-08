@@ -1,9 +1,9 @@
-version: "3.5"
+name: "influxdb-cluster"
 
 services:
 
   influxdb-meta-01:
-    image: chengshiwen/influxdb:1.8.10-c1.1.2-meta
+    image: chengshiwen/influxdb:1.8.11-c1.2.0-meta
     container_name: influxdb-meta-01
     hostname: influxdb-meta-01
     restart: unless-stopped
@@ -11,7 +11,7 @@ services:
       - influxdb-cluster
 
   influxdb-meta-02:
-    image: chengshiwen/influxdb:1.8.10-c1.1.2-meta
+    image: chengshiwen/influxdb:1.8.11-c1.2.0-meta
     container_name: influxdb-meta-02
     hostname: influxdb-meta-02
     restart: unless-stopped
@@ -19,7 +19,7 @@ services:
       - influxdb-cluster
 
   influxdb-meta-03:
-    image: chengshiwen/influxdb:1.8.10-c1.1.2-meta
+    image: chengshiwen/influxdb:1.8.11-c1.2.0-meta
     container_name: influxdb-meta-03
     hostname: influxdb-meta-03
     restart: unless-stopped
@@ -27,7 +27,7 @@ services:
       - influxdb-cluster
 
   influxdb-data-01:
-    image: chengshiwen/influxdb:1.8.10-c1.1.2-data
+    image: chengshiwen/influxdb:1.8.11-c1.2.0-data
     container_name: influxdb-data-01
     hostname: influxdb-data-01
     ports:
@@ -37,7 +37,7 @@ services:
       - influxdb-cluster
 
   influxdb-data-02:
-    image: chengshiwen/influxdb:1.8.10-c1.1.2-data
+    image: chengshiwen/influxdb:1.8.11-c1.2.0-data
     container_name: influxdb-data-02
     hostname: influxdb-data-02
     ports:

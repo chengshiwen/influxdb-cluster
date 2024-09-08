@@ -15,13 +15,13 @@ InfluxDB Cluster is an open source **time series database** with
 **no external dependencies**. It's useful for recording metrics,
 events, and performing analytics.
 
-InfluxDB Cluster is inspired by [InfluxDB Enterprise](https://docs.influxdata.com/enterprise_influxdb/v1.8/), [InfluxDB v1.8.10](https://github.com/influxdata/influxdb/tree/v1.8.10) and [InfluxDB v0.11.1](https://github.com/influxdata/influxdb/tree/v0.11.1), aiming to replace InfluxDB Enterprise.
+InfluxDB Cluster is inspired by [InfluxDB Enterprise](https://docs.influxdata.com/enterprise_influxdb/v1/), [InfluxDB v1.8.10](https://github.com/influxdata/influxdb/tree/v1.8.10) and [InfluxDB v0.11.1](https://github.com/influxdata/influxdb/tree/v0.11.1), aiming to replace InfluxDB Enterprise.
 
 InfluxDB Cluster is easy to maintain, and can be updated in real time with upstream [InfluxDB 1.x](https://github.com/influxdata/influxdb/tree/master-1.x).
 
 ## Features
 
-* Built-in [HTTP API](https://docs.influxdata.com/influxdb/latest/guides/writing_data/) so you don't have to write any server side code to get up and running.
+* Built-in [HTTP API](https://docs.influxdata.com/enterprise_influxdb/v1/guides/write_data/) so you don't have to write any server side code to get up and running.
 * Data can be tagged, allowing very flexible querying.
 * SQL-like query language.
 * Clustering is supported out of the box, so that you can scale horizontally to handle your data. **Clustering is currently in production state.**
@@ -34,7 +34,7 @@ InfluxDB Cluster is easy to maintain, and can be updated in real time with upstr
 
 > **Note**: The clustering of InfluxDB Cluster is exactly the same as that of InfluxDB Enterprise.
 
-Please see: [Clustering in InfluxDB Enterprise](https://docs.influxdata.com/enterprise_influxdb/v1.8/concepts/clustering/)
+Please see: [Clustering in InfluxDB Enterprise](https://docs.influxdata.com/enterprise_influxdb/v1/concepts/clustering/)
 
 Architectural overview:
 
@@ -57,10 +57,10 @@ Complete the following steps to install an InfluxDB Cluster in your own environm
 
 ## Docker Quickstart
 
-Download [docker-compose.yml](./docker/quick/docker-compose.yml), then start 3 meta nodes and 2 data nodes by `docker-compose`:
+Download [docker-compose.yml](./docker/quick/docker-compose.yml), then start 3 meta nodes and 2 data nodes by `docker compose`:
 
 ```
-docker-compose up -d
+docker compose up -d
 docker exec -it influxdb-meta-01 bash
 influxd-ctl add-meta influxdb-meta-01:8091
 influxd-ctl add-meta influxdb-meta-02:8091
@@ -73,7 +73,7 @@ influxd-ctl show
 Stop and remove them when they are no longer in use:
 
 ```
-docker-compose down -v
+docker compose down -v
 ```
 
 ## Getting Started
@@ -85,6 +85,7 @@ curl -XPOST "http://influxdb-data-01:8086/query" --data-urlencode "q=CREATE DATA
 ```
 
 ### Insert some data
+
 ```
 curl -XPOST "http://influxdb-data-01:8086/write?db=mydb" \
 -d 'cpu,host=server01,region=uswest load=42 1434055562000000000'
@@ -99,12 +100,14 @@ curl -XPOST "http://influxdb-data-02:8086/write?db=mydb&consistency=quorum" \
 > **Note**: `consistency=[any,one,quorum,all]` sets the write consistency for the point. `consistency` is `one` if you do not specify consistency. See the [Insert some data / Write consistency](https://github.com/chengshiwen/influxdb-cluster/wiki/Home-Eng#insert-some-data) for detailed descriptions of each consistency option.
 
 ### Query for the data
+
 ```
 curl -G "http://influxdb-data-02:8086/query?pretty=true" --data-urlencode "db=mydb" \
 --data-urlencode "q=SELECT * FROM cpu WHERE host='server01' AND time < now() - 1d"
 ```
 
 ### Analyze the data
+
 ```
 curl -G "http://influxdb-data-02:8086/query?pretty=true" --data-urlencode "db=mydb" \
 --data-urlencode "q=SELECT mean(load) FROM cpu WHERE region='uswest'"
@@ -113,9 +116,9 @@ curl -G "http://influxdb-data-02:8086/query?pretty=true" --data-urlencode "db=my
 ## Documentation
 
 * View the wiki: [English Document](https://github.com/chengshiwen/influxdb-cluster/wiki/Home-Eng) / [中文文档](https://github.com/chengshiwen/influxdb-cluster/wiki/Home).
-* Read more about the [design goals and motivations of the project](https://docs.influxdata.com/enterprise_influxdb/v1.8/).
-* Follow the [getting started guide](https://docs.influxdata.com/enterprise_influxdb/v1.8/introduction/getting-started/) to learn the basics in just a few minutes.
-* Learn more about [clustering](https://docs.influxdata.com/enterprise_influxdb/v1.8/concepts/clustering/) and [glossary](https://docs.influxdata.com/enterprise_influxdb/v1.8/concepts/glossary/).
+* Read more about the [design goals and motivations of the project](https://docs.influxdata.com/enterprise_influxdb/v1/).
+* Follow the [getting started guide](https://docs.influxdata.com/enterprise_influxdb/v1/introduction/getting-started/) to learn the basics in just a few minutes.
+* Learn more about [clustering](https://docs.influxdata.com/enterprise_influxdb/v1/concepts/clustering/) and [glossary](https://docs.influxdata.com/enterprise_influxdb/v1/concepts/glossary/).
 
 ## Contributing
 
