@@ -202,6 +202,7 @@ def run_tests(race, parallel, timeout, no_vet, run_gen, junit=False):
         logging.error("{}".format(out))
         return False
 
+    run_gen = False # disable run_gen
     if run_gen:
         logging.info("Ensuring codegen is up to date ...")
         out = run("./generate.sh")
