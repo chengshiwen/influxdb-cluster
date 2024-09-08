@@ -120,18 +120,13 @@ func (c *boundedPool) Get() (net.Conn, error) {
 		return c.wrapConn(conn.c), nil
 	default:
 		// Could not get connection, can we create a new one?
-		c.mu.RLock()
-		select {
-		case c.total <- struct{}{}:
-			c.mu.RUnlock()
+		if c.tryTake() {
 			conn, err := factory()
 			if err != nil {
-				<-c.total
+				c.tryFree()
 				return nil, err
 			}
 			return c.wrapConn(conn), nil
-		default:
-			c.mu.RUnlock()
 		}
 	}
 
@@ -170,7 +165,7 @@ func (c *boundedPool) put(conn net.Conn) error {
 		return nil
 	default:
 		// pool is full, close passed connection
-		<-c.total
+		c.tryFree()
 		return conn.Close()
 	}
 }
@@ -207,6 +202,28 @@ func (c *boundedPool) Size() int {
 	return len(c.total)
 }
 
+func (c *boundedPool) tryTake() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	select {
+	case c.total <- struct{}{}:
+		return true
+	default:
+	}
+	return false
+}
+
+func (c *boundedPool) tryFree() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	select {
+	case <-c.total:
+		return true
+	default:
+	}
+	return false
+}
+
 // pruneIdleConns prunes idle connections.
 func (c *boundedPool) pruneIdleConns(idleTime time.Duration) {
 	if idleTime <= 0 {
@@ -234,7 +251,7 @@ func (c *boundedPool) pruneIdleConns(idleTime time.Duration) {
 				select {
 				case conn := <-conns:
 					if conn.t.Add(idleTime).Before(time.Now()) {
-						<-c.total
+						c.tryFree()
 						conn.c.Close()
 					} else {
 						newConns = append(newConns, conn)
@@ -279,7 +296,7 @@ func (p *pooledConn) Close() error {
 
 	if p.unusable {
 		if p.Conn != nil {
-			<-p.c.total
+			p.c.tryFree()
 			return p.Conn.Close()
 		}
 		return nil
