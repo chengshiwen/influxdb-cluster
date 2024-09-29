@@ -32,7 +32,7 @@ func (h *Handler) handleProfiles(w http.ResponseWriter, r *http.Request) {
 	case "/debug/pprof":
 		// Redirect to /debug/pprof/ to avoid jumping to a blank page
 		// after clicking the links on the /debug/pprof webpage.
-		http.Redirect(w, r, "/debug/pprof/", http.StatusFound)
+		http.Redirect(w, r, "/debug/pprof/", http.StatusTemporaryRedirect)
 	default:
 		httppprof.Index(w, r)
 	}
