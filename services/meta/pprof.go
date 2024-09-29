@@ -25,6 +25,10 @@ func (h *handler) handleProfiles(w http.ResponseWriter, r *http.Request) {
 		httppprof.Symbol(w, r)
 	case "/debug/pprof/all":
 		h.archiveProfiles(w, r)
+	case "/debug/pprof":
+		// Redirect to /debug/pprof/ to avoid jumping to a blank page
+		// after clicking the links on the /debug/pprof webpage.
+		http.Redirect(w, r, "/debug/pprof/", http.StatusFound)
 	default:
 		httppprof.Index(w, r)
 	}
