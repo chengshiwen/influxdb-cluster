@@ -30,8 +30,8 @@ func (h *Handler) handleProfiles(w http.ResponseWriter, r *http.Request) {
 	case "/debug/pprof/all":
 		h.archiveProfilesAndQueries(w, r)
 	case "/debug/pprof":
-		// Add a redirect form /debug/pprof to /debug/pprof
-		// To fix the bug where users opening /debug/pprof are redirected to an empty link,
+		// Redirect to /debug/pprof/ to avoid jumping to a blank page
+		// after clicking the links on the /debug/pprof webpage.
 		http.Redirect(w, r, "/debug/pprof/", http.StatusFound)
 	default:
 		httppprof.Index(w, r)
